@@ -34,7 +34,7 @@ Once downloaded, put these files in the `/data` folder.
 
 ## Running the code
 
-To run the script (`plot_pca_prodromal_vs_pd.R`) and generate the figure (`pca_biplot_prodromal_vs_pd.png`) for PSET 4, simply `cd [path]/scripts` and run the command. 
+To run the script (`scripts/plot_pca_prodromal_vs_pd.R`) and generate the figure (`figures/pca_biplot_prodromal_vs_pd.png`) for PSET 4, simply `cd [path]/scripts` and run the command. 
 
 ```bash
 Rscript plot_pca_prodromal_vs_pd.R
