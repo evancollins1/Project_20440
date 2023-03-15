@@ -4,8 +4,7 @@
 # Any questions can be sent to evanc@mit.edu
 
 # All data acquired from Parkinson's Progression Markers Initiative (PPMI)
-# as part of AMP PD database
-# AMP PD database requires signed user agreements to access
+# PPMI database requires signed user agreements to access
 # Hence, no data will be made public in this repo.
 # Two datasets from PPMI are referenced in this script:
 # 1. PPMI_Prodromal_Cohort_BL_to_Year_1_Dataset_Apr2020.csv
