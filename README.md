@@ -48,4 +48,4 @@ Note that this R script was run with R version 4.1.1 and uses two non-base packa
 
 - Data used in the preparation of this article were obtained from the Parkinson’s Progression Markers Initiative (PPMI) [database](https://www.ppmi-info.org/access-data-specimens/download-data). For up-to-date information on the study, visit www.ppmi-info.org.
 
-- `.gitignore` file was adapted from `R.gitignore` in the [gitignore repo](https://github.com/github/gitignore)
+- `.gitignore` file was adapted from `R.gitignore` in the [gitignore repo](https://github.com/github/gitignore).
