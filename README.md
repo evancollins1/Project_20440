@@ -6,9 +6,9 @@ This repository is for the 20.440 final project at MIT. The objective of this pr
 
 Data for this project is sourced from the Parkinson's Progression Markers Initiative (PPMI) database. Brian and I obtained access to PPMI by signing user agreements. As part of the user agreement, we cannot make public any raw data from PPMI. Professor Blainey has allowed this. 
 
-For PSET 4, rather than focusing on small RNA-seq data, I analyzed clinical data available in PPMI, with the objective of trying to reveal how prodromal patients' demographics and more qualitative symptom presentation (i.e., clinical variables) differ compared to those of PD patients. This analysis will aid us in formulating hypotheses once we begin evaluating small RNA-seq data to distinguish the cohorts.
+For PSET 4, rather than focusing on small RNA-seq data, I analyzed clinical data available in PPMI, with the objective of trying to reveal how prodromal subjects' demographics and more qualitative symptom presentations (i.e., clinical variables) differ compared to those of PD subjects. This analysis will aid us in formulating hypotheses once we begin evaluating small RNA-seq data to distinguish the cohorts.
 
-This PSET 4-specific repository contains only one script (`plot_pca_prodromal_vs_pd.R`) to generate one figure (`pca_biplot_prodromal_vs_pd.png`). The script generates a PCA biplot figure to show principal component scores [points] of PD patients vs. prodromal patients and show loadings of the significant clinical variables [vectors] that distinguish the two cohorts. The script contains extensive comments explaining the standard data processing and statistical techniques used.
+This PSET 4-specific repository contains only one script (`plot_pca_prodromal_vs_pd.R`) to generate one figure (`pca_biplot_prodromal_vs_pd.png`). The script generates a PCA biplot figure to show principal component scores [points] of PD subjects vs. prodromal subjects and show loadings of the significant clinical variables [vectors] that distinguish the two cohorts. The script contains extensive comments explaining the standard data processing and statistical techniques used.
 
 ## Repository structure
 
@@ -46,6 +46,6 @@ Note that this R script was run with R version 4.1.1 and uses two non-base packa
 
 ## Citations
 
-- Data used in the preparation of this article were obtained from the Parkinson’s Progression Markers Initiative (PPMI) [database](www.ppmi-info.org/access-data-specimens/download-data). For up-to-date information on the study, visit www.ppmi-info.org.
+- Data used in the preparation of this article were obtained from the Parkinson’s Progression Markers Initiative (PPMI) [database](https://www.ppmi-info.org/access-data-specimens/download-data). For up-to-date information on the study, visit www.ppmi-info.org.
 
 - `.gitignore` file was adapted from `R.gitignore` in the [gitignore repo](https://github.com/github/gitignore)
