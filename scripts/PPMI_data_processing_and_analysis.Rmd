@@ -1,0 +1,1331 @@
+---
+title: "sncRNA PPMI data processing"
+output: html_document
+---
+
+# Load necessary packages
+
+```{r, warning = FALSE, message = FALSE}
+# All code written by Evan Collins for MIT 20.440 project
+# All data acquired from Parkinson's Progression Markers Initiative (PPMI)
+# 10 April 2023
+# Any questions can be sent to evantomcollins@gmail.com
+
+library(data.table)
+library(umap)
+library(ggplot2)
+library(ggprism)
+library(rstatix)
+library(factoextra)
+library(MASS)
+library(dplyr)
+#install.packages("BiocManager")
+#BiocManager::install("DESeq2")
+#BiocManager::install('EnhancedVolcano')
+library(EnhancedVolcano)
+library(DESeq2)
+```
+
+# Initial sncRNA and clinical data processing
+
+(Due to data usage agreements, note that PPMI data is not included in the GitHub repo)
+
+```{r}
+# Load sncrna raw data
+sncrna_df <- as.data.frame(fread("../data/PPMI_sncRNAcounts/counts/sncrna_quantification_matrix_raw.csv"))
+
+# Get patients list
+PATNO_list <- gsub("\\..*","", substring(colnames(sncrna_df)[-1], 10))
+# Remove #221 (has NA in title; can figure out later)
+PATNO_list_clean <- PATNO_list[-221]
+PATNO_list_clean <- as.integer(PATNO_list_clean)
+PATNO_unique_list <- unique(PATNO_list)
+```
+
+```{r}
+# Load patient dictionary file included in PPMI database
+participant_status_df <- read.csv("/Users/Evan/Desktop/MIT_Courses/20.440/Project/../data/Participant_Status.csv")
+```
+
+```{r}
+# 335 of the patients are not in Participant_Status.csv
+# Remove them
+PATNO_list_clean <- PATNO_list[PATNO_list %in% participant_status_df$PATNO]
+PATNO_unique_list_clean <- PATNO_unique_list[PATNO_unique_list %in% participant_status_df$PATNO]
+
+sncrna_df_clean <- sncrna_df[, c(FALSE, PATNO_list %in% PATNO_list_clean)]
+rownames(sncrna_df_clean) <- sncrna_df[,1]
+
+# Get vector of cohort designations across all patients in sncRNA cohort
+sncrna_cohort_full_list <- rep(NA, length(PATNO_list_clean))
+for (i in 1:length(PATNO_list_clean)){
+ sncrna_cohort_full_list[i] <- participant_status_df$COHORT_DEFINITION[participant_status_df$PATNO == PATNO_list_clean[i]]
+}
+sncrna_cohort_full_list[sncrna_cohort_full_list == "Healthy Control"] <- "Healthy"
+sncrna_cohort_full_list[sncrna_cohort_full_list == "Parkinson's Disease"] <- "PD"
+
+sncrna_cohort_list <- rep(NA, length(PATNO_unique_list_clean))
+for (i in 1:length(PATNO_unique_list_clean)){
+ sncrna_cohort_list[i] <- participant_status_df$COHORT_DEFINITION[participant_status_df$PATNO == PATNO_unique_list_clean[i]]
+}
+sncrna_cohort_list[sncrna_cohort_list == "Healthy Control"] <- "Healthy"
+sncrna_cohort_list[sncrna_cohort_list == "Parkinson's Disease"] <- "PD"
+
+# Make a patient info dictionary
+patient_info_df <- data.frame("PATNO" = PATNO_unique_list_clean,
+                              "cohort" = sncrna_cohort_list,
+                              "num_visits" = NA)
+
+for (i in 1:nrow(patient_info_df)){
+  patient_info_df$num_visits[i] <- length(which(PATNO_list_clean %in% PATNO_unique_list_clean[i]))
+}
+```
+
+```{r}
+# Print out the number of baseline patients in each cohort
+table(patient_info_df$cohort)
+```
+
+# Figure 1 - PCA biplot from clinical data for PD and prodromal subjects
+
+```{r}
+# Load .csv datasets for prodromal cohort and Parkinson's disease (PD) cohort
+prodromal_df <- read.csv("/Users/Evan/Desktop/MIT_Courses/20.440/Pset/Pset4/sandbox/../data/PPMI_Prodromal_Cohort_BL_to_Year_1_Dataset_Apr2020.csv")
+pd_df <- read.csv("/Users/Evan/Desktop/MIT_Courses/20.440/Pset/Pset4/sandbox/../data/PPMI_Original_Cohort_BL_to_Year_5_Dataset_Apr2020.csv")
+
+# Keep columns that are shared between the two datasets
+pd_df_shared <- pd_df[, colnames(pd_df) %in% colnames(prodromal_df)]
+prodromal_df_shared <- prodromal_df[, colnames(prodromal_df) %in% colnames(pd_df)]
+
+# Add explicit cohort column
+pd_df_shared$cohort <- "PD" # has parkinson's disease
+prodromal_df_shared$cohort <- "Prodromal" # prodromal, i.e., at risk for PD
+
+# Combine the two dataframes
+pd_prodromal_df <- rbind(pd_df_shared, prodromal_df_shared)
+
+# Keep only baseline measurement values for each patient
+pd_prodromal_df <- pd_prodromal_df[pd_prodromal_df$EVENT_ID == "BL", ]
+
+# Remove some categorical variables not important for factor analysis
+pd_prodromal_df <- pd_prodromal_df[, !colnames(pd_prodromal_df) %in% c("SITE", 
+                                                                       "APPRDX", 
+                                                                       "EVENT_ID",
+                                                                       "YEAR",
+                                                                       "visit_date",
+                                                                       "ST_startdate",
+                                                                       "ST_year1"
+                                                                       )]
+
+# Remove columns that have more than 11 NA values
+pd_prodromal_df <- pd_prodromal_df[, !colSums(is.na(pd_prodromal_df)) > 11]
+# Remove subjects that have NA values
+pd_prodromal_df <- pd_prodromal_df[!rowSums(is.na(pd_prodromal_df)) > 0, ]
+# Remove othneuro, tau_txt, and ptau_txt columns since  mostly "" characters
+pd_prodromal_df <- pd_prodromal_df[!colnames(pd_prodromal_df) %in% c("othneuro", 
+                                                                     "tau_txt",
+                                                                     "ptau_txt")]
+# Remove PD_MED_USE as all zeros
+pd_prodromal_df <- pd_prodromal_df[!colnames(pd_prodromal_df) %in% c("PD_MED_USE")]
+# Remove NP1DDS as it causes GLM not to converge; insignificant
+pd_prodromal_df <- pd_prodromal_df[!colnames(pd_prodromal_df) %in% c("NP1DDS")]
+
+# Make the patient number the rownames instead of own column
+rownames(pd_prodromal_df) <- pd_prodromal_df$PATNO
+pd_prodromal_df <- pd_prodromal_df[, !colnames(pd_prodromal_df) == "PATNO"]
+# Make the cohort column the leftmost
+pd_prodromal_df <- pd_prodromal_df[, c(ncol(pd_prodromal_df), 
+                                       1:ncol(pd_prodromal_df)-1
+                                       )] 
+# Make the cohort column a factor to run GLM
+pd_prodromal_df$cohort <- as.factor(pd_prodromal_df$cohort)
+
+# Final dimensions are 712 patients by 78 variables (+ cohort variable)
+# dim(pd_prodromal_df)
+
+table(pd_prodromal_df$cohort)
+```
+
+```{r}
+#library(MASS)
+# Fit the full model 
+#full.model <- glm(cohort ~., data = pd_prodromal_df, family = "binomial")
+# Stepwise regression model
+#step.model <- stepAIC(full.model, direction = "both", 
+#                      trace = FALSE)
+#summary(step.model)
+```
+
+```{r}
+# Calculate p values from GLM for each column in relation to cohort 
+p_values_by_column <- rep(NA, ncol(pd_prodromal_df))
+for (i in 2:ncol(pd_prodromal_df)){
+  p_values_by_column[i] <- coef(summary(glm(pd_prodromal_df$cohort ~ pd_prodromal_df[,i], 
+                                            family = "binomial")))[2,4]
+}
+
+# Apply Bonferroni correction based on number of GLM tests ran
+bonferroni_alpha <- 0.05/(ncol(pd_prodromal_df) - 1)
+# Evaluate which columns are suggested to be signifcant
+sig_factors <- colnames(pd_prodromal_df)[which(p_values_by_column < bonferroni_alpha)]
+
+# Realization: remove variables that are simply categorical versions of others
+# e.g. remove "age_cat", i.e., categorical variable for "age"
+sig_factors_clean <- sig_factors[!sig_factors %in% c("age_cat",
+                                                     "hy_on",
+                                                     "NHY_ON",
+                                                     "rigidity_on",
+                                                     "td_pigd_on",
+                                                     "tremor_on",
+                                                     "updrs3_score_on",
+                                                     "updrs_totscore_on",
+                                                     "rem_cat"
+                                                     )]
+
+# Make dataframe with only significant columns
+pd_prodromal_sig_df <- pd_prodromal_df[, colnames(pd_prodromal_df) %in% c("cohort", sig_factors_clean)]
+```
+
+```{r}
+# Run PCA
+pca_results <- prcomp(pd_prodromal_sig_df[-1], center = TRUE, scale = TRUE)
+
+# Plot PCA biplot with variables as directional lines
+pca_biplot_fig <- fviz_pca_biplot(pca_results,
+                                  col.ind = pd_prodromal_sig_df$cohort,
+                                  addEllipses = TRUE,
+                                  col.var = "black",
+                                  label = "var",
+                                  select.var = list(contrib = 10),
+                                  repel = TRUE,
+                                  labelsize = 3,
+                                  legend.title = "Cohort") + 
+  theme_classic() +
+  ggtitle("PCA biplot from clinical data - PD vs. prodromal subjects") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+pca_biplot_fig
+
+ggsave("../figures/subplots/pca_biplot_prodromal_vs_pd.png", 
+       plot = pca_biplot_fig)
+```
+
+
+# Figure 2 - DESeq2 volcano plots at baseline
+
+
+```{r}
+# Create baseline only sncRNA dataframe
+sncrna_df_bl <- sncrna_df_clean[, grepl("BL", colnames(sncrna_df_clean))]
+
+sncrna_df_bl_t <- as.data.frame(t(sncrna_df_bl)) # transpose such that rows are patients; columns are transcripts
+
+PATNO_bl_list <- gsub("\\..*","", substring(rownames(sncrna_df_bl_t), 10))
+
+cohort_bl_list <- c()
+for (i in 1:length(PATNO_bl_list)){
+  cohort_bl_list[i] <- participant_status_df$COHORT_DEFINITION[participant_status_df$PATNO == PATNO_bl_list[i]]
+}
+
+cohort_bl_list[cohort_bl_list == "Healthy Control"] <- "Healthy"
+cohort_bl_list[cohort_bl_list == "Parkinson's Disease"] <- "PD"
+```
+
+```{r}
+# Baseline
+sncrna_df_bl <- as.data.frame(lapply(sncrna_df_bl, as.integer))
+rownames(sncrna_df_bl) <- sncrna_df$Reference
+
+meta_df_bl <- data.frame("cohort" = cohort_bl_list)
+rownames(meta_df_bl) <- colnames(sncrna_df_bl)
+
+table(meta_df_bl$cohort)
+```
+
+## Figure 2A - PD vs. H (BL)
+
+```{r}
+dds_bl <- DESeqDataSetFromMatrix(
+  countData = sncrna_df_bl, 
+  colData = meta_df_bl, 
+  design = ~cohort
+  )
+
+dds_bl$cohort <- factor(dds_bl$cohort, levels = c("Healthy", "PD", "Prodromal", "SWEDD"))
+```
+
+```{r}
+dds_bl <- DESeq(dds_bl)
+```
+
+```{r}
+res_bl_pd_h <- results(
+  dds_bl, 
+  contrast = c("cohort", "PD", "Healthy")
+  )
+
+res_bl_pd_h <- lfcShrink(
+  dds_bl,
+  contrast = c("cohort", "PD", "Healthy"), 
+  res = res_bl_pd_h, type = "normal"
+  )
+
+summary(res_bl_pd_h)
+
+res_bl_pd_h_df <- as.data.frame(res_bl_pd_h)
+#write.csv(res_bl_pd_h_df, "../data/res_bl_pd_h_df.csv", row.names = FALSE)
+```
+
+```{r}
+res_bl_pd_h_df <- read.csv("../data/res_bl_pd_h_df.csv")
+```
+
+```{r}
+ volcano_bl_pd_h <- EnhancedVolcano(
+   res_bl_pd_h_df,
+   lab = sncrna_df$Reference,
+   x = 'log2FoldChange',
+   y = 'pvalue',
+   title = 'PD vs. Healthy',
+   subtitle = "sncRNASeq (at baseline)",
+   caption = paste(nrow(res_bl_pd_h_df), "sncRNA transcripts analyzed"),
+   pCutoff = 10e-5,
+   FCcutoff = 1, # also tried 0.5
+   pointSize = 3.0,
+   labSize = 4.0,
+   xlim = c(-2.5, 2.5)
+ )
+
+volcano_bl_pd_h
+
+ggsave("../figures/subplots/volcano_bl_pd_h.png", 
+       plot = volcano_bl_pd_h,
+       width = 2500,
+       height = 3000,
+       units = "px")
+
+# why are there many NA for padj = https://support.bioconductor.org/p/9135436/
+table(is.na(as.data.frame(res_bl_pd_h)$padj))
+```
+
+
+## Figure 2B - PD vs. P (BL)
+
+```{r}
+res_bl_pd_p <- results(
+  dds_bl, 
+  contrast = c("cohort", "PD", "Prodromal")
+  )
+
+res_bl_pd_p <- lfcShrink(
+  dds_bl,
+  contrast = c("cohort", "PD", "Prodromal"), 
+  res = res_bl_pd_p, type = "normal"
+  )
+
+summary(res_bl_pd_p)
+
+res_bl_pd_p_df <- as.data.frame(res_bl_pd_p)
+#write.csv(res_bl_pd_p_df, "../data/res_bl_pd_p_df.csv", row.names = FALSE)
+```
+
+```{r}
+res_bl_pd_p_df <- read.csv("../data/res_bl_pd_p_df.csv")
+```
+
+
+```{r}
+ volcano_bl_pd_p <- EnhancedVolcano(
+   res_bl_pd_p_df,
+   lab = sncrna_df$Reference,
+   x = 'log2FoldChange',
+   y = 'pvalue',
+   title = 'PD vs. Prodromal',
+   subtitle = "sncRNASeq (at baseline)",
+   caption = paste(nrow(res_bl_pd_p_df), "sncRNA transcripts analyzed"),
+   pCutoff = 10e-5,
+   FCcutoff = 1, # also tried 0.5
+   pointSize = 3.0,
+   labSize = 4.0,
+   xlim = c(-2.5, 2.5)
+ )
+
+volcano_bl_pd_p
+
+ggsave("../figures/subplots/volcano_bl_pd_p.png", 
+       plot = volcano_bl_pd_p,
+       width = 2500,
+       height = 3000,
+       units = "px")
+```
+
+## Figure 2C - P vs. H (BL)
+
+```{r}
+res_bl_p_h <- results(
+  dds_bl, 
+  contrast = c("cohort", "Prodromal", "Healthy")
+  )
+
+res_bl_p_h <- lfcShrink(
+  dds_bl,
+  contrast = c("cohort", "Prodromal", "Healthy"), 
+  res = res_bl_p_h, type = "normal"
+  )
+
+summary(res_bl_p_h)
+
+res_bl_p_h_df <- as.data.frame(res_bl_p_h)
+#write.csv(res_bl_p_h_df, "../data/res_bl_p_h_df.csv", row.names = FALSE)
+```
+
+```{r}
+res_bl_p_h_df <- read.csv("../data/res_bl_p_h_df.csv")
+```
+
+```{r}
+ volcano_bl_p_h <- EnhancedVolcano(
+   res_bl_p_h_df,
+   lab = sncrna_df$Reference,
+   x = 'log2FoldChange',
+   y = 'pvalue',
+   title = 'Prodromal vs. Healthy',
+   subtitle = "sncRNASeq (at baseline)",
+   caption = paste(nrow(res_bl_p_h_df), "sncRNA transcripts analyzed"),
+   pCutoff = 10e-5,
+   FCcutoff = 1, # also tried 0.5
+   pointSize = 3.0,
+   labSize = 4.0,
+   xlim = c(-2.5, 2.5)
+ )
+
+volcano_bl_p_h
+
+ggsave("../figures/subplots/volcano_bl_p_h.png", 
+       plot = volcano_bl_p_h,
+       width = 2500,
+       height = 3000,
+       units = "px")
+```
+
+
+# Figure 3 - Dimensionality reduction using UMAP and LDA at baseline
+
+## Figure 3A - UMAP at baseline
+
+```{r}
+# UMAP
+bl_umap <- umap(sncrna_df_bl_t, n_components = 2)
+bl_umap_df <- data.frame("cohort" = cohort_bl_list, "UMAP1" = bl_umap$layout[,1], "UMAP2" = bl_umap$layout[,2])
+```
+
+```{r}
+bl_umap <- ggplot(
+  bl_umap_df, 
+  aes(x = UMAP1, y = UMAP2, color = cohort)
+  ) + 
+  geom_point(alpha = 0.9) + 
+  labs(x = "UMAP 1", y = "UMAP 2") +
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("PPMI Subjects") +
+  theme(
+    plot.title = element_text(size = 15, face = "bold"),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 15),
+    legend.title = element_text(size = 12), 
+    legend.text = element_text(size = 12)
+        ) +
+  guides(color = guide_legend(override.aes = list(size = 4)))
+
+bl_umap
+
+ggsave("../figures/subplots/bl_umap.png", 
+       plot = bl_umap,
+       width = 2500,
+       height = 3000,
+       units = "px")
+```
+
+
+## Figure 3B - LDA at baseline
+
+```{r}
+pd_p_sig_transcripts <- sncrna_df$Reference[which(res_bl_pd_p_df$padj < 10e-5 & res_bl_pd_p_df$log2FoldChange > 1)]
+pd_h_sig_transcripts <- sncrna_df$Reference[which(res_bl_pd_h_df$padj < 10e-5 & res_bl_pd_h_df$log2FoldChange < -1)]
+p_h_sig_transcripts <- sncrna_df$Reference[which(res_bl_p_h_df$padj < 10e-5 & res_bl_p_h_df$log2FoldChange < -1)]
+
+sig_bl_transcripts_df <- data.frame("transcript" = c(pd_p_sig_transcripts, pd_h_sig_transcripts, p_h_sig_transcripts),
+                                    "comparison" = c(rep("PD_vs_Prodromal", length(pd_p_sig_transcripts)),
+                                                   rep("PD_vs_Healthy", length(pd_h_sig_transcripts)),
+                                                   rep("Prodromal_vs_Healthy", length(p_h_sig_transcripts))
+                                                   )
+                                   )
+
+sig_bl_transcripts <- sig_bl_transcripts_df$transcript
+
+sncrna_norm_df <- as.data.frame(fread("../data/PPMI_sncRNAcounts/counts/sncrna_quantification_matrix_rpm_norm.csv"))
+rownames(sncrna_norm_df) <- sncrna_norm_df$Reference
+sncrna_norm_df <- sncrna_norm_df[-1]
+sncrna_norm_df_clean <- sncrna_norm_df[, c(PATNO_list %in% PATNO_list_clean)]
+sncrna_norm_df_bl <- sncrna_norm_df_clean[, grepl("BL", colnames(sncrna_norm_df_clean))]
+sncrna_norm_df_bl_t <- as.data.frame(t(sncrna_norm_df_bl))
+
+sncrna_norm_df_bl_t_sig_bl <- sncrna_norm_df_bl_t[, which(colnames(sncrna_norm_df_bl_t) %in% sig_bl_transcripts)]
+
+sncrna_norm_df_bl_t_sig_bl$cohort <- cohort_bl_list
+sncrna_norm_df_bl_t_sig_bl <- sncrna_norm_df_bl_t_sig_bl[ ,c(50, 1:49)]
+
+sncrna_norm_df_bl_t_sig_bl <- sncrna_norm_df_bl_t_sig_bl[sncrna_norm_df_bl_t_sig_bl$cohort != "SWEDD", ] # remove SWEDD patients
+```
+
+```{r}
+lda_results <- lda(cohort ~., sncrna_norm_df_bl_t_sig_bl)
+lda_predictions <- predict(lda_results)
+lda_df <- data.frame("outcome" = sncrna_norm_df_bl_t_sig_bl$cohort,
+                     "lda" = lda_predictions$x)
+
+data_lda <- data.frame(varnames = rownames(coef(lda_results)), coef(lda_results))
+data_lda_top8 <- rbind(
+  data_lda[order(abs(data_lda$LD1), decreasing = TRUE), ][c(1:4),],
+  data_lda[order(abs(data_lda$LD2), decreasing = TRUE), ][c(1:4),]
+)
+
+data_lda_top8$angle <- atan2(data_lda_top8$LD1, data_lda_top8$LD2)
+data_lda_top8$x_start <- data_lda_top8$y_start <- 0
+data_lda_top8$x_end <- cos(data_lda_top8$angle) * 3
+data_lda_top8$y_end <- sin(data_lda_top8$angle) * 3
+
+lda_bl_plot <-
+  ggplot(data = lda_df, 
+       mapping = aes(x = lda.LD1, y = lda.LD2, color = outcome)) + 
+  geom_point(size = 2, alpha = 0.7) +
+  labs(x = "LD1", y = "LD2") +
+  theme_classic() +
+  stat_ellipse(aes(fill = outcome), geom = "polygon", alpha = 0.3) +
+  geom_hline(yintercept = 0, size = .2) + 
+  geom_vline(xintercept = 0, size = .2) +
+  geom_segment(data = data_lda_top8,
+                      aes(x = 0, y = 0,
+                          xend = x_end, yend = y_end,
+                          shape = NULL, linetype = NULL),
+                      arrow=arrow(length=unit(0.1,"mm")),
+                      color="black") +
+  geom_text(data = data_lda_top8,
+            aes(y = y_end, x = x_end, 
+                label = varnames),
+            size = 2.5, vjust = 1, hjust = 0, colour = "black") +
+  xlab("LD1 (82.1%)") +
+  ylab("LD2 (17.9%)") +
+  ggtitle("LDA biplot - PD vs. prodromal vs. healthy subjects (at baseline)")
+
+lda_bl_plot
+
+ggsave("../figures/subplots/lda_bl_plot.png", 
+       plot = lda_bl_plot,
+       width = 2000,
+       height = 2000,
+       units = "px")
+```
+
+
+# Figure 4
+
+## Figure 4A - DESeq2 on P-t0 vs. P-t4
+
+```{r}
+sncrna_norm_df_p <- sncrna_norm_df_clean[,which(sncrna_cohort_full_list == "Prodromal")]
+
+prodromal_patno <- unique(gsub("\\..*", "", substring(colnames(sncrna_norm_df_p), 10)))
+
+num_visits_p <- c()
+for (i in 1:length(prodromal_patno)){
+  num_visits_p[i] <- table(grepl(prodromal_patno[i], colnames(sncrna_norm_df_p)))["TRUE"]
+}
+
+# 70 prodromal patients with at least 4 visits with transcriptomics data
+p_patno_4plus_visits <- prodromal_patno[which(num_visits_p >= 4)]
+
+sncrna_p_4plus_df <- sncrna_df_clean[, grepl(paste(p_patno_4plus_visits, collapse = "|"), colnames(sncrna_df_clean))]
+
+sncrna_p_4plus_BL_V4_df <- sncrna_pd_clinical_df[, grepl("BL|V04", colnames(sncrna_p_4plus_df))]
+sncrna_p_4plus_BL_V4_df <- as.data.frame(lapply(sncrna_p_4plus_BL_V4_df, as.integer))
+rownames(sncrna_p_4plus_BL_V4_df) <- sncrna_df$Reference
+bl_or_v4 <- colnames(sncrna_p_4plus_BL_V4_df)
+bl_or_v4[grepl("BL", bl_or_v4)] <- "BL"
+bl_or_v4[grepl("V04", bl_or_v4)] <- "V4"
+
+meta_p_4plus_BL_V4_df <- data.frame("timepoint" = bl_or_v4)
+rownames(meta_p_4plus_BL_V4_df) <- colnames(sncrna_p_4plus_BL_V4_df)
+```
+
+```{r}
+dds_p <- DESeqDataSetFromMatrix(
+  countData = sncrna_p_4plus_BL_V4_df, 
+  colData = meta_p_4plus_BL_V4_df, 
+  design = ~timepoint
+  )
+
+dds_p$timepoint <- factor(dds_p$timepoint, levels = c("BL", "V4"))
+```
+
+```{r}
+dds_p <- DESeq(dds_p)
+```
+
+```{r}
+res_p_b_v4 <- results(
+  dds_p, 
+  contrast = c("timepoint", "BL", "V4")
+  )
+
+res_p_b_v4 <- lfcShrink(
+  dds_p,
+  contrast = c("timepoint", "BL", "V4"), 
+  res = res_p_b_v4, type = "normal"
+  )
+
+summary(res_p_b_v4)
+
+res_p_b_v4_df <- as.data.frame(res_p_b_v4)
+write.csv(res_p_b_v4_df, "../data/res_p_b_v4_df.csv", row.names = FALSE)
+```
+
+```{r}
+ volcano_p_bl_v4 <- EnhancedVolcano(
+   res_p_b_v4_df,
+   lab = sncrna_df$Reference,
+   x = 'log2FoldChange',
+   y = 'pvalue',
+   title = 'Prodomal-t0 vs. Prodomal-t4',
+   subtitle = "sncRNASeq",
+   caption = paste(nrow(res_p_b_v4_df), "sncRNA transcripts analyzed"),
+   pCutoff = 10e-5,
+   FCcutoff = 1,
+   pointSize = 3.0,
+   labSize = 4.0,
+   xlim = c(-2.5, 2.5)
+ )
+
+volcano_p_bl_v4
+
+ggsave("../figures/subplots/volcano_p_bl_v4.png", 
+       plot = volcano_p_bl_v4,
+       width = 2500,
+       height = 3000,
+       units = "px")
+```
+
+
+## Figure 4B - DESeq2 on PD-t0 vs. PD-t4
+
+```{r}
+pd_clinical_df <- read.csv("/Users/Evan/Desktop/MIT_Courses/20.440/Pset/Pset4/sandbox/../data/PPMI_Original_Cohort_BL_to_Year_5_Dataset_Apr2020.csv")
+
+pd_clinical_patients <- unique(pd_clinical_df$PATNO)
+
+sncrna_pd_clinical_df <- sncrna_df_clean[, grepl(paste(pd_clinical_patients, collapse = "|"), colnames(sncrna_df_clean))]
+
+sncrna_pd_clinical_BL_V8_df <- sncrna_pd_clinical_df[, grepl("BL|V08", colnames(sncrna_pd_clinical_df))]
+sncrna_pd_clinical_BL_V8_df <- as.data.frame(lapply(sncrna_pd_clinical_BL_V8_df, as.integer))
+rownames(sncrna_pd_clinical_BL_V8_df) <- sncrna_df$Reference
+bl_or_v8 <- colnames(sncrna_pd_clinical_BL_V8_df)
+bl_or_v8[grepl("BL", bl_or_v8)] <- "BL"
+bl_or_v8[grepl("V08", bl_or_v8)] <- "V8"
+
+meta_pd_clinical_BL_V8_df <- data.frame("timepoint" = bl_or_v8)
+rownames(meta_pd_clinical_BL_V8_df) <- colnames(sncrna_pd_clinical_BL_V8_df)
+```
+
+```{r}
+dds_pd <- DESeqDataSetFromMatrix(
+  countData = sncrna_pd_clinical_BL_V8_df, 
+  colData = meta_pd_clinical_BL_V8_df, 
+  design = ~timepoint
+  )
+
+dds_pd$timepoint <- factor(dds_pd$timepoint, levels = c("BL", "V8"))
+```
+
+```{r}
+dds_pd <- DESeq(dds_pd)
+```
+
+```{r}
+res_pd_bl_v8 <- results(
+  dds_pd, 
+  contrast = c("timepoint", "BL", "V8")
+  )
+
+res_pd_bl_v8 <- lfcShrink(
+  dds_pd,
+  contrast = c("timepoint", "BL", "V8"), 
+  res = res_pd_bl_v8, type = "normal"
+  )
+
+summary(res_pd_bl_v8)
+
+res_pd_bl_v8_df <- as.data.frame(res_pd_bl_v8)
+#write.csv(res_pd_bl_v8_df, "../data/res_pd_bl_v8_df.csv", row.names = FALSE)
+```
+
+```{r}
+volcano_pd_bl_v8 <- EnhancedVolcano(
+ res_pd_bl_v8_df,
+ lab = sncrna_df$Reference,
+ x = 'log2FoldChange',
+ y = 'pvalue',
+ title = 'PD-t0 vs. PD-t8',
+ subtitle = "sncRNASeq",
+ caption = paste(nrow(res_pd_bl_v8_df), "sncRNA transcripts analyzed"),
+ pCutoff = 10e-5,
+ FCcutoff = 0.75,
+ pointSize = 3.0,
+ labSize = 4.0,
+ xlim = c(-2.5, 2.5)
+)
+
+volcano_pd_bl_v8
+
+ggsave("../figures/subplots/volcano_pd_bl_v8.png", 
+       plot = volcano_pd_bl_v8,
+       width = 2500,
+       height = 3000,
+       units = "px")
+```
+
+
+
+# Figure 5 - Tracking how sncRNAs correlation with motor symptoms in prodromal patients over time
+
+## Figure 5A - Boxplots
+
+```{r, warning = FALSE}
+sncrna_norm_df_clean <- sncrna_norm_df[, c(PATNO_list %in% PATNO_list_clean)]
+sncrna_norm_df_bl <- sncrna_norm_df_clean[, grepl("BL", colnames(sncrna_norm_df_clean))]
+rownames(sncrna_norm_df_bl) <- sncrna_df$Reference
+sncrna_norm_df_bl_t <- as.data.frame(t(sncrna_norm_df_bl))
+
+pd_p_sig_transcripts_bl_df <- sncrna_norm_df_bl_t[, which(colnames(sncrna_norm_df_bl_t) %in% pd_p_sig_transcripts)]
+pd_p_sig_transcripts_bl_df <- data.frame("norm_count" = c(as.numeric(pd_p_sig_transcripts_bl_df[,1]),
+                                                          as.numeric(pd_p_sig_transcripts_bl_df[,2])),
+                                         "transcript" = c(rep(colnames(pd_p_sig_transcripts_bl_df)[1], 
+                                                            nrow(pd_p_sig_transcripts_bl_df)),
+                                                          rep(colnames(pd_p_sig_transcripts_bl_df)[2], 
+                                                            nrow(pd_p_sig_transcripts_bl_df))),
+                                         "cohort" = rep(cohort_bl_list, 2))
+
+pd_p_sig_transcripts_bl_df <- pd_p_sig_transcripts_bl_df[pd_p_sig_transcripts_bl_df$cohort != "SWEDD", ]
+pd_p_sig_transcripts_bl_df$cohort <- factor(pd_p_sig_transcripts_bl_df$cohort, levels = c("Healthy", "Prodromal", "PD")) 
+
+pd_p_sig_transcripts_bl_df_pval <- pd_p_sig_transcripts_bl_df %>% 
+  rstatix::group_by(transcript) %>% 
+  rstatix::t_test(norm_count ~ cohort) %>% 
+  rstatix::add_xy_position()
+
+pd_p_sig_transcripts_bl_df_pval$y.position <- c(3.6, 4.2, 3.9, 0.8, 1.4, 1.1)
+
+pd_p_sig_transcripts_boxplots <-
+  ggplot(
+    pd_p_sig_transcripts_bl_df, 
+    aes(x = cohort, y = log10(norm_count), fill = transcript)) + 
+  geom_boxplot() +
+  facet_wrap(~ transcript, scales = "free") + 
+  xlab("") + 
+  ylab("log10 normalized counts") +
+  theme_prism() +
+  add_pvalue(pd_p_sig_transcripts_bl_df_pval) + 
+  guides(fill = FALSE) 
+
+pd_p_sig_transcripts_boxplots
+
+ggsave("../figures/subplots/pd_p_sig_transcripts_boxplots.png", 
+       plot = pd_p_sig_transcripts_boxplots,
+       width = 2500,
+       height = 1500,
+       units = "px")
+```
+
+## Figure 5B - Histogram of two significant sncRNAs
+
+```{r}
+updrs_part3_df <- read.csv("../data/MDS-UPDRS_Part_III.csv")
+
+updrs_part3_p_patno <- unique(updrs_part3_df$PATNO[which(updrs_part3_df$PATNO %in% p_patno_4plus_visits)])
+
+updrs_part3_p <- list()
+updrs_part3_p_change <- c()
+updrs_part3_p_change_raw <- c()
+for (i in 1:length(updrs_part3_p_patno)){
+  updrs_part3_p[[i]] <- updrs_part3_df$NP3TOT[updrs_part3_df$PATNO == updrs_part3_p_patno[i]]
+  totscore_start <- na.omit(updrs_part3_p[[i]])[1]
+  totscore_end <- na.omit(updrs_part3_p[[i]])[length(na.omit(updrs_part3_p[[i]]))]
+  updrs_part3_p_change_raw[i] <- totscore_end - totscore_start
+  if (updrs_part3_p_change_raw[i] == 0){
+    updrs_part3_p_change[i] <- 0 # no change
+  } else if (updrs_part3_p_change_raw[i] > 0) {
+    updrs_part3_p_change[i] <- -1 # worsened
+  } else {
+    updrs_part3_p_change[i] <- 1 # improved
+  }
+}
+
+updrs_part3_p_patno_worsened <- updrs_part3_p_patno[which(updrs_part3_p_change == -1)]
+updrs_part3_p_patno_improved <- updrs_part3_p_patno[which(updrs_part3_p_change == 1)]
+```
+
+```{r}
+visits_index <- list()
+updrs_part3_p_with_tx_data <- list()
+for (i in 1:length(updrs_part3_p_patno)){ # for each patient
+  colnames_i <- colnames(sncrna_norm_df_p)[grepl(updrs_part3_p_patno[i], colnames(sncrna_norm_df_p))]
+  visits_index[[i]]  <- substr(sub(".*.V", "", colnames_i), start = 1, stop = 2)
+  for (j in 1:length(visits_index[[i]])){
+    if (visits_index[[i]][j] == "PP"){
+      visits_index[[i]][j] <- as.numeric(1)
+    } else {
+      visits_index[[i]][j] <- as.numeric(visits_index[[i]][j])
+    }
+  }
+  visits_index[[i]] <- as.numeric(visits_index[[i]])
+  updrs_part3_p_with_tx_data[[i]] <- nafill(updrs_part3_p[[i]][visits_index[[i]]], type = "locf")
+  updrs_part3_p_with_tx_data[[i]] <- nafill(updrs_part3_p_with_tx_data[[i]], type = "nocb")
+}
+```
+
+
+```{r, warning = FALSE}
+rho_p_all <- list()
+for (i in 1:length(pd_p_sig_transcripts)){ # for each transcript
+  rho_p_all[[i]] <- rep(NA, length(pd_p_sig_transcripts))
+
+ for (j in 1:length(updrs_part3_p_patno)){ # for each patient
+   sncrna_norm_df_p_i_j <- as.numeric(
+     sncrna_norm_df_p[which(colnames(sncrna_norm_df_bl_t) %in% pd_p_sig_transcripts[i]),
+                      grepl(updrs_part3_p_patno[j], 
+                            colnames(sncrna_norm_df_p))]
+     )
+   
+   updrs_part3_j <- updrs_part3_p_with_tx_data[[j]]
+   rho_p_all[[i]][j] <- cor(sncrna_norm_df_p_i_j, updrs_part3_j, method = "spearman")
+ } 
+  # remove patients that did not exhibit any change in NPDRS score
+  rho_p_all[[i]] <- na.omit(rho_p_all[[i]])
+}
+```
+
+
+```{r, warning = FALSE, message = FALSE}
+rho_p_all_df <- data.frame("rho" = c(rho_p_all[[1]],
+                                     rho_p_all[[2]]),
+                           "transcript" = c(rep(pd_p_sig_transcripts[1], length(rho_p_all[[1]])),
+                                            rep(pd_p_sig_transcripts[2], length(rho_p_all[[1]]))
+                                            ))
+
+pd_p_sig_transcripts_rho_hist <-
+  ggplot(rho_p_all_df,
+         aes(x = rho, fill = transcript)) +
+  geom_histogram(alpha = 0.4) +
+  xlab("Spearman correlation between UPDRS part III\nmotor score and transcript expression") +
+  ylab("Prodromal patient count") +
+  geom_vline(xintercept =
+               mean(rho_p_all_df$rho[rho_p_all_df$transcript == pd_p_sig_transcripts[1]]),
+             color = "#F8766D",
+             linewidth = 1.5,
+             linetype = "longdash"
+             ) +
+  geom_vline(xintercept =
+               mean(rho_p_all_df$rho[rho_p_all_df$transcript == pd_p_sig_transcripts[2]]),
+             color = "#00C0B8",
+             linewidth = 1.5,
+             linetype = "longdash"
+             ) +
+  theme_prism()
+
+pd_p_sig_transcripts_rho_hist
+
+ggsave("../figures/subplots/pd_p_sig_transcripts_rho_hist.png", 
+       plot = pd_p_sig_transcripts_rho_hist,
+       width = 2500,
+       height = 1500,
+       units = "px")
+```
+
+## Figure 5C - Top 4 sncRNAs that correlate with motor symptoms
+
+```{r, warning = FALSE, message = FALSE}
+# search all transcripts that have padj from DESeq2
+pd_p_all_transcripts <- rownames(res_bl_pd_p_df)[which(!is.na(res_bl_pd_p_df$padj))]
+
+mean_rho <- c()
+rho_p_all <- list()
+for (i in 1:length(pd_p_all_transcripts)){ # for each transcript
+  rho_p_all[[i]] <- rep(NA, length(pd_p_all_transcripts))
+ for (j in 1:length(updrs_part3_p_patno)){ # for each patient
+   sncrna_norm_df_p_i_j <- as.numeric(
+     sncrna_norm_df_p[which(colnames(sncrna_norm_df_bl_t) %in% pd_p_all_transcripts[i]),
+                      grepl(updrs_part3_p_patno[j], 
+                            colnames(sncrna_norm_df_p))]
+     )
+   
+   updrs_part3_j <- updrs_part3_p_with_tx_data[[j]]
+   rho_p_all[[i]][j] <- cor(sncrna_norm_df_p_i_j, updrs_part3_j, method = "spearman")
+ } 
+  # remove patients that did not exhibit any change in NPDRS score
+  rho_p_all[[i]] <- na.omit(rho_p_all[[i]])
+  mean_rho[i] <- mean(rho_p_all[[i]])
+}
+```
+
+
+```{r, warning = FALSE, message = FALSE}
+top10_indices_p <- order(abs(mean_rho), decreasing = TRUE)[1:10]
+# 1 had too few samples; 3 and 5 had strange distribution shape
+top4_indices_p_df <- data.frame(
+  "transcript" = 
+    c(rep(pd_p_all_transcripts[top10_indices_p[2]], length(rho_p_all[[top10_indices_p[2]]])),
+      rep(pd_p_all_transcripts[top10_indices_p[4]], length(rho_p_all[[top10_indices_p[4]]])),
+      rep(pd_p_all_transcripts[top10_indices_p[6]], length(rho_p_all[[top10_indices_p[6]]])),
+      rep(pd_p_all_transcripts[top10_indices_p[7]], length(rho_p_all[[top10_indices_p[7]]]))
+      ),
+  "rho" = 
+    c(rho_p_all[[top10_indices_p[2]]],
+      rho_p_all[[top10_indices_p[4]]],
+      rho_p_all[[top10_indices_p[6]]],
+      rho_p_all[[top10_indices_p[7]]]
+      ),
+  "mean" = 
+    c(rep(mean_rho[top10_indices_p[2]], length(rho_p_all[[top10_indices_p[2]]])),
+      rep(mean_rho[top10_indices_p[4]], length(rho_p_all[[top10_indices_p[4]]])),
+      rep(mean_rho[top10_indices_p[6]], length(rho_p_all[[top10_indices_p[6]]])),
+      rep(mean_rho[top10_indices_p[7]], length(rho_p_all[[top10_indices_p[7]]]))
+    )
+)
+
+top4_transcripts_p_density <-  
+ ggplot(top4_indices_p_df,
+        aes(x = rho, fill = transcript)) +
+  geom_vline(aes(xintercept = top4_indices_p_df$mean,
+                 color = top4_indices_p_df$transcript)
+             ) + 
+  geom_density(alpha = 0.4) +
+  facet_wrap(~ transcript, scales = "free") +
+  xlab("Spearman correlation between UPDRS part III\nmotor score and transcript expression") +
+  ylab("Prodromal patient density") +
+  guides(fill = FALSE) +
+  guides(color = FALSE) +
+  theme_prism()
+
+top4_transcripts_p_density
+
+ggsave("../figures/subplots/top4_transcripts_p_density.png", 
+       plot = top4_transcripts_p_density,
+       width = 2500,
+       height = 1500,
+       units = "px")
+```
+
+
+## Figure 5D - Spin test
+
+```{r, warning = FALSE, message = FALSE}
+# spin tests
+mean_rho_spin <- c()
+rho_p_all_spin <- list()
+for (i in 1:length(pd_p_all_transcripts)){ # for each transcript
+  rho_p_all_spin[[i]] <- rep(NA, length(pd_p_all_transcripts))
+ for (j in 1:length(updrs_part3_p_patno)){ # for each patient
+   updrs_part3_j <- updrs_part3_p_with_tx_data[[j]]
+   sncrna_norm_df_p_i_j <- runif(length(updrs_part3_j), 0, 20)
+   rho_p_all_spin[[i]][j] <- cor(sncrna_norm_df_p_i_j, updrs_part3_j, method = "spearman")
+ } 
+  # remove patients that did not exhibit any change in NPDRS score
+  rho_p_all_spin[[i]] <- na.omit(rho_p_all_spin[[i]])
+  mean_rho_spin[i] <- mean(rho_p_all_spin[[i]])
+}
+
+spin_p_df <- data.frame(
+  "transcript" = 
+    c(rep(pd_p_all_transcripts[top10_indices_p[2]], length(mean_rho_spin)),
+      rep(pd_p_all_transcripts[top10_indices_p[4]], length(mean_rho_spin)),
+      rep(pd_p_all_transcripts[top10_indices_p[6]], length(mean_rho_spin)),
+      rep(pd_p_all_transcripts[top10_indices_p[7]], length(mean_rho_spin))
+      ),
+  "mean_rho_spin" = rep(mean_rho_spin, 4),
+  "mean_rho_exp" = c(rep(top4_indices_p_df$mean[top4_indices_p_df$transcript == pd_p_all_transcripts[top10_indices_p[2]]][1], length(mean_rho_spin)),
+                     rep(top4_indices_p_df$mean[top4_indices_p_df$transcript == pd_p_all_transcripts[top10_indices_p[4]]][1], length(mean_rho_spin)),
+                     rep(top4_indices_p_df$mean[top4_indices_p_df$transcript == pd_p_all_transcripts[top10_indices_p[6]]][1], length(mean_rho_spin)),
+                     rep(top4_indices_p_df$mean[top4_indices_p_df$transcript == pd_p_all_transcripts[top10_indices_p[7]]][1], length(mean_rho_spin))
+                     )
+  )
+
+
+spin_top4_transcripts_p_density <-
+  ggplot(spin_p_df,
+            aes(x = mean_rho_spin)) +
+  geom_vline(aes(xintercept = spin_p_df$mean_rho_exp,
+                 color = spin_p_df$transcript)
+             ) + 
+  geom_histogram(aes(y=..density..), color="black", fill="white") +
+  geom_density(alpha = .2, fill = "#E68613") +
+  #facet_wrap(~ transcript, scales = "free") +
+  xlab("Mean spearman correlation between UPDRS part III\nmotor score and transcript expression") +
+  ylab("Prodromal patient density") +
+  guides(fill = FALSE) +
+  guides(color = FALSE) +
+  ggtitle("Null dist. with top 4 from experimental dist. marked") + 
+  theme_prism()
+
+spin_top4_transcripts_p_density
+   
+ggsave("../figures/subplots/spin_top4_transcripts_p_density.png", 
+   plot = spin_top4_transcripts_p_density,
+   width = 2500,
+   height = 1500,
+   units = "px")
+```
+
+
+# Figure 6 - Tracking how sncRNAs correlation with motor symptoms in PD patients over time 
+
+## Figure 6A - Histogram of five significant sncRNAs
+
+```{r, warning = FALSE}
+sncrna_norm_df_clean <- sncrna_norm_df[, c(PATNO_list %in% PATNO_list_clean)]
+sncrna_norm_df_bl <- sncrna_norm_df_clean[, grepl("BL", colnames(sncrna_norm_df_clean))]
+rownames(sncrna_norm_df_bl) <- sncrna_df$Reference
+sncrna_norm_df_bl_t <- as.data.frame(t(sncrna_norm_df_bl))
+
+pd_h_sig_transcripts_bl_df <- sncrna_norm_df_bl_t[, which(colnames(sncrna_norm_df_bl_t) %in% pd_h_sig_transcripts)]
+pd_h_sig_transcripts_bl_df <- data.frame("norm_count" = c(as.numeric(pd_h_sig_transcripts_bl_df[,1]),
+                                                          as.numeric(pd_h_sig_transcripts_bl_df[,2]),
+                                                          as.numeric(pd_h_sig_transcripts_bl_df[,3]),
+                                                          as.numeric(pd_h_sig_transcripts_bl_df[,4]),
+                                                          as.numeric(pd_h_sig_transcripts_bl_df[,5])),
+                                         "transcript" = c(rep(colnames(pd_h_sig_transcripts_bl_df)[1], 
+                                                            nrow(pd_h_sig_transcripts_bl_df)),
+                                                          rep(colnames(pd_h_sig_transcripts_bl_df)[2], 
+                                                            nrow(pd_h_sig_transcripts_bl_df)),
+                                                          rep(colnames(pd_h_sig_transcripts_bl_df)[3], 
+                                                            nrow(pd_h_sig_transcripts_bl_df)),
+                                                          rep(colnames(pd_h_sig_transcripts_bl_df)[4], 
+                                                            nrow(pd_h_sig_transcripts_bl_df)),
+                                                          rep(colnames(pd_h_sig_transcripts_bl_df)[5], 
+                                                            nrow(pd_h_sig_transcripts_bl_df))),
+                                         "cohort" = rep(cohort_bl_list, 5))
+
+
+pd_h_sig_transcripts_bl_df <- pd_h_sig_transcripts_bl_df[pd_h_sig_transcripts_bl_df$cohort != "SWEDD", ]
+pd_h_sig_transcripts_bl_df$cohort[pd_h_sig_transcripts_bl_df$cohort == "Healthy"] <- "H"
+pd_h_sig_transcripts_bl_df$cohort[pd_h_sig_transcripts_bl_df$cohort == "Prodromal"] <- "P"
+pd_h_sig_transcripts_bl_df$cohort <- factor(pd_h_sig_transcripts_bl_df$cohort, levels = c("H", "P", "PD")) 
+
+```
+
+```{r}
+updrs_part3_df <- read.csv("../data/MDS-UPDRS_Part_III.csv")
+
+sncrna_norm_df_pd <- sncrna_norm_df_clean[,which(sncrna_cohort_full_list == "PD")]
+
+pd_patno <- unique(gsub("\\..*", "", substring(colnames(sncrna_norm_df_pd), 10)))
+
+num_visits_p <- c()
+for (i in 1:length(pd_patno)){
+  num_visits_p[i] <- table(grepl(pd_patno[i], colnames(sncrna_norm_df_pd)))["TRUE"]
+}
+
+pd_patno_8plus_visits <- pd_patno[which(num_visits_p >= 8)]
+
+sncrna_pd_8plus_df <- sncrna_df_clean[, grepl(paste(pd_patno_8plus_visits, collapse = "|"), colnames(sncrna_df_clean))]
+
+updrs_part3_pd_patno <- unique(updrs_part3_df$PATNO[which(updrs_part3_df$PATNO %in% pd_patno_8plus_visits)])
+
+updrs_part3_pd <- list()
+for (i in 1:length(updrs_part3_pd_patno)){
+  updrs_part3_pd[[i]] <- updrs_part3_df$NP3TOT[updrs_part3_df$PATNO == updrs_part3_pd_patno[i]]
+}
+```
+
+```{r}
+visits_index <- list()
+updrs_part3_pd_with_tx_data <- list()
+for (i in 1:length(updrs_part3_pd_patno)){ # for each patient
+  colnames_i <- colnames(sncrna_norm_df_pd)[grepl(updrs_part3_pd_patno[i], colnames(sncrna_norm_df_pd))]
+  visits_index[[i]]  <- substr(sub(".*.V", "", colnames_i), start = 1, stop = 2)
+  for (j in 1:length(visits_index[[i]])){
+    if (visits_index[[i]][j] == "PP"){
+      visits_index[[i]][j] <- as.numeric(1)
+    } else {
+      visits_index[[i]][j] <- as.numeric(visits_index[[i]][j])
+    }
+  }
+  visits_index[[i]] <- as.numeric(visits_index[[i]])
+  updrs_part3_pd_with_tx_data[[i]] <- nafill(updrs_part3_pd[[i]][visits_index[[i]]], type = "locf")
+  updrs_part3_pd_with_tx_data[[i]] <- nafill(updrs_part3_pd_with_tx_data[[i]], type = "nocb")
+}
+```
+
+```{r, warning = FALSE}
+rho_pd_all <- list()
+for (i in 1:length(pd_h_sig_transcripts)){ # for each transcript
+  rho_pd_all[[i]] <- rep(NA, length(pd_h_sig_transcripts))
+
+ for (j in 1:length(updrs_part3_pd_patno)){ # for each patient
+   sncrna_norm_df_pd_i_j <- as.numeric(
+     sncrna_norm_df_pd[which(colnames(sncrna_norm_df_bl_t) %in% pd_h_sig_transcripts[i]),
+                      grepl(updrs_part3_pd_patno[j], 
+                            colnames(sncrna_norm_df_pd))]
+     )
+   
+   updrs_part3_j <- updrs_part3_pd_with_tx_data[[j]]
+   rho_pd_all[[i]][j] <- cor(sncrna_norm_df_pd_i_j, updrs_part3_j, method = "spearman")
+ } 
+  # remove patients that did not exhibit any change in NPDRS score
+  rho_pd_all[[i]] <- na.omit(rho_pd_all[[i]])
+}
+```
+
+```{r}
+rho_pd_all_df <- data.frame("rho" = c(rho_pd_all[[1]],
+                                      rho_pd_all[[2]],
+                                      rho_pd_all[[3]],
+                                      rho_pd_all[[4]],
+                                      rho_pd_all[[5]]),
+                           "transcript" = c(rep(pd_h_sig_transcripts[1], length(rho_pd_all[[1]])),
+                                            rep(pd_h_sig_transcripts[2], length(rho_pd_all[[1]])),
+                                            rep(pd_h_sig_transcripts[3], length(rho_pd_all[[1]])),
+                                            rep(pd_h_sig_transcripts[4], length(rho_pd_all[[1]])),
+                                            rep(pd_h_sig_transcripts[5], length(rho_pd_all[[1]]))
+                                            ))
+
+pd_h_sig_transcripts_rho_hist <-
+  ggplot(rho_pd_all_df,
+         aes(x = rho, fill = transcript)) +
+  geom_histogram(alpha = 0.6) +
+  xlab("Spearman correlation between UPDRS part III\nmotor score and transcript expression") +
+  ylab("PD patient count") +
+  geom_vline(xintercept =
+               mean(rho_pd_all_df$rho[rho_pd_all_df$transcript == pd_h_sig_transcripts[1]]),
+             color = "#F8766D",
+             linewidth = 1.5,
+             linetype = "longdash"
+             ) +
+  geom_vline(xintercept =
+               mean(rho_pd_all_df$rho[rho_pd_all_df$transcript == pd_h_sig_transcripts[2]]),
+             color = "#00C0B8",
+             linewidth = 1.5,
+             linetype = "longdash"
+             ) +
+  theme_prism()
+
+pd_h_sig_transcripts_rho_hist
+
+ggsave("../figures/subplots/pd_h_sig_transcripts_rho_hist.png", 
+       plot = pd_h_sig_transcripts_rho_hist,
+       width = 2500,
+       height = 1500,
+       units = "px")
+```
+## Figure 6B - Top 4 sncRNAs that correlate with motor symptoms
+
+```{r, warning = FALSE, message = FALSE}
+# search all transcripts that have padj from DESeq2
+pd_h_all_transcripts <- sncrna_df$Reference[which(!is.na(res_bl_pd_h_df$padj))]
+
+mean_pd_rho <- c()
+rho_pd_all <- list()
+for (i in 1:length(pd_h_all_transcripts)){ # for each transcript
+  rho_pd_all[[i]] <- rep(NA, length(pd_h_all_transcripts))
+ for (j in 1:length(updrs_part3_pd_patno)){ # for each patient
+   sncrna_norm_df_pd_i_j <- as.numeric(
+     sncrna_norm_df_pd[which(colnames(sncrna_norm_df_bl_t) %in% pd_h_all_transcripts[i]),
+                      grepl(updrs_part3_pd_patno[j], 
+                            colnames(sncrna_norm_df_pd))]
+     )
+   rho_pd_all[[i]][j] <- cor(sncrna_norm_df_pd_i_j, updrs_part3_pd_with_tx_data[[j]], method = "spearman")
+ } 
+  # remove patients that did not exhibit any change in NPDRS score
+  mean_pd_rho[i] <- mean(rho_pd_all[[i]], na.rm = TRUE)
+}
+```
+
+```{r, warning = FALSE, message = FALSE}
+top10_indices_pd <- order(abs(mean_pd_rho), decreasing = TRUE)[1:10]
+# 1 had too few samples; 3 and 5 had strange distribution shape
+top4_indices_pd_df <- data.frame(
+  "transcript" = 
+    c(rep(pd_h_all_transcripts[top10_indices_pd[2]], length(rho_pd_all[[top10_indices_pd[2]]])),
+      rep(pd_h_all_transcripts[top10_indices_pd[4]], length(rho_pd_all[[top10_indices_pd[4]]])),
+      rep(pd_h_all_transcripts[top10_indices_pd[6]], length(rho_pd_all[[top10_indices_pd[6]]])),
+      rep(pd_h_all_transcripts[top10_indices_pd[7]], length(rho_pd_all[[top10_indices_pd[7]]]))
+      ),
+  "rho" = 
+    c(rho_pd_all[[top10_indices_pd[2]]],
+      rho_pd_all[[top10_indices_pd[4]]],
+      rho_pd_all[[top10_indices_pd[6]]],
+      rho_pd_all[[top10_indices_pd[7]]]
+      ),
+  "mean" = 
+    c(rep(mean_pd_rho[top10_indices_pd[2]], length(rho_pd_all[[top10_indices_pd[2]]])),
+      rep(mean_pd_rho[top10_indices_pd[4]], length(rho_pd_all[[top10_indices_pd[4]]])),
+      rep(mean_pd_rho[top10_indices_pd[6]], length(rho_pd_all[[top10_indices_pd[6]]])),
+      rep(mean_pd_rho[top10_indices_pd[7]], length(rho_pd_all[[top10_indices_pd[7]]]))
+    )
+)
+
+top4_transcripts_pd_density <-  
+ ggplot(top4_indices_pd_df,
+        aes(x = rho, fill = transcript)) +
+  geom_vline(aes(xintercept = top4_indices_pd_df$mean,
+                 color = top4_indices_pd_df$transcript)
+             ) + 
+  geom_density(alpha = 0.4) +
+  facet_wrap(~ transcript, scales = "free") +
+  xlab("Spearman correlation between UPDRS part III\nmotor score and transcript expression") +
+  ylab("PD patient density") +
+  guides(fill = FALSE) +
+  guides(color = FALSE) +
+  theme_prism()
+
+top4_transcripts_pd_density
+
+ggsave("../figures/subplots/top4_transcripts_pd_density.png", 
+       plot = top4_transcripts_pd_density,
+       width = 2500,
+       height = 1500,
+       units = "px")
+```
+
+## Figure 6C - Spin tests
+
+```{r, warning = FALSE, message = FALSE}
+# spin tests
+mean_rho_pd_spin <- c()
+rho_pd_all_spin <- list()
+for (i in 1:length(pd_h_all_transcripts)){ # for each transcript
+  rho_pd_all_spin[[i]] <- rep(NA, length(pd_h_all_transcripts))
+ for (j in 1:length(updrs_part3_pd_patno)){ # for each patient
+   updrs_part3_j <- updrs_part3_pd_with_tx_data[[j]]
+   sncrna_norm_df_pd_i_j <- runif(length(updrs_part3_j), 0, 20)
+   rho_pd_all_spin[[i]][j] <- cor(sncrna_norm_df_pd_i_j, updrs_part3_j, method = "spearman")
+ } 
+  # remove patients that did not exhibit any change in NPDRS score
+  rho_pd_all_spin[[i]] <- na.omit(rho_pd_all_spin[[i]])
+  mean_rho_pd_spin[i] <- mean(rho_pd_all_spin[[i]])
+}
+
+spin_pd_df <- data.frame(
+  "transcript" = 
+    c(rep(pd_h_all_transcripts[top10_indices_pd[2]], length(mean_rho_pd_spin)),
+      rep(pd_h_all_transcripts[top10_indices_pd[4]], length(mean_rho_pd_spin)),
+      rep(pd_h_all_transcripts[top10_indices_pd[6]], length(mean_rho_pd_spin)),
+      rep(pd_h_all_transcripts[top10_indices_pd[7]], length(mean_rho_pd_spin))
+      ),
+  "mean_rho_pd_spin" = rep(mean_rho_pd_spin, 4),
+  "mean_rho_pd_exp" = c(rep(top4_indices_pd_df$mean[top4_indices_pd_df$transcript == pd_h_all_transcripts[top10_indices_pd[2]]][1], length(mean_rho_pd_spin)),
+                     rep(top4_indices_pd_df$mean[top4_indices_pd_df$transcript == pd_h_all_transcripts[top10_indices_pd[4]]][1], length(mean_rho_pd_spin)),
+                     rep(top4_indices_pd_df$mean[top4_indices_pd_df$transcript == pd_h_all_transcripts[top10_indices_pd[6]]][1], length(mean_rho_pd_spin)),
+                     rep(top4_indices_pd_df$mean[top4_indices_pd_df$transcript == pd_h_all_transcripts[top10_indices_pd[7]]][1], length(mean_rho_pd_spin))
+                     )
+  )
+
+
+spin_top4_transcripts_pd_density <-
+  ggplot(spin_pd_df,
+            aes(x = mean_rho_pd_spin)) +
+  geom_vline(aes(xintercept = spin_pd_df$mean_rho_pd_exp,
+                 color = spin_pd_df$transcript)
+             ) + 
+  geom_histogram(aes(y=..density..), color="black", fill="white") +
+  geom_density(alpha = .2, fill = "#E68613") +
+  xlab("Mean spearman correlation between UPDRS part III\nmotor score and transcript expression") +
+  ylab("PD patient density") +
+  guides(fill = FALSE) +
+  guides(color = FALSE) +
+  ggtitle("Null dist. with top 4 from experimental dist. marked") + 
+  theme_prism()
+
+spin_top4_transcripts_pd_density
+   
+ggsave("../figures/subplots/spin_top4_transcripts_pd_density.png", 
+   plot = spin_top4_transcripts_pd_density,
+   width = 2500,
+   height = 1500,
+   units = "px")
+```
+
+## Figure 6D - LDA for PD-t0 vs. PD-t4 vs. PD-t8
+
+
+```{r}
+# Run LDA on PD-t0 vs. PD-t8
+
+# search all transcripts that have padj from DESeq2
+pd_h_all_transcripts <- sncrna_df$Reference[which(!is.na(res_bl_pd_h_df$padj))]
+
+sncrna_pd_clinical_norm_df <- sncrna_norm_df_clean[, grepl(paste(pd_clinical_patients, collapse = "|"), colnames(sncrna_norm_df_clean))]
+sncrna_pd_clinical_norm_BL_V4_V8_df <- sncrna_pd_clinical_norm_df[, grepl("BL|V04|V08", colnames(sncrna_pd_clinical_norm_df))]
+#sncrna_pd_clinical_norm_BL_V4_V8_df <- as.data.frame(lapply(sncrna_pd_clinical_norm_BL_V4_V8_df, as.integer))
+rownames(sncrna_pd_clinical_norm_BL_V4_V8_df) <- sncrna_df$Reference
+bl_or_v4_or_v8 <- colnames(sncrna_pd_clinical_norm_BL_V4_V8_df)
+bl_or_v4_or_v8[grepl("BL", bl_or_v4_or_v8)] <- "BL"
+bl_or_v4_or_v8[grepl("V08", bl_or_v4_or_v8)] <- "V8"
+bl_or_v4_or_v8[grepl("V04", bl_or_v4_or_v8)] <- "V4"
+
+sncrna_pd_clinical_norm_BL_V4_V8_df_t <- as.data.frame(t(sncrna_pd_clinical_norm_BL_V4_V8_df))
+sncrna_pd_clinical_norm_BL_V4_V8_df_t_clean <- sncrna_pd_clinical_norm_BL_V4_V8_df_t[, which(colnames(sncrna_pd_clinical_norm_BL_V4_V8_df_t) %in% pd_h_all_transcripts)]
+sncrna_pd_clinical_norm_BL_V4_V8_df_t_clean$timepoint <- bl_or_v4_or_v8
+
+options(expressions = 500000)
+lda_results <- lda(sncrna_pd_clinical_norm_BL_V4_V8_df_t_clean[,-ncol(sncrna_pd_clinical_norm_BL_V4_V8_df_t_clean)],
+                   grouping = sncrna_pd_clinical_norm_BL_V4_V8_df_t_clean[,ncol(sncrna_pd_clinical_norm_BL_V4_V8_df_t_clean)])
+lda_predictions <- predict(lda_results)
+lda_df <- data.frame("outcome" = sncrna_pd_clinical_norm_BL_V4_V8_df_t_clean$timepoint,
+                     "lda" = lda_predictions$x)
+
+data_lda <- data.frame(varnames = rownames(coef(lda_results)), coef(lda_results))
+data_lda_top8 <- rbind(
+  data_lda[order(abs(data_lda$LD1), decreasing = TRUE), ][c(1:4),],
+  data_lda[order(abs(data_lda$LD2), decreasing = TRUE), ][c(1:4),]
+)
+
+data_lda_top8$angle <- atan2(data_lda_top8$LD1, data_lda_top8$LD2)
+data_lda_top8$x_start <- data_lda_top8$y_start <- 0
+data_lda_top8$x_end <- cos(data_lda_top8$angle) * 3
+data_lda_top8$y_end <- sin(data_lda_top8$angle) * 3
+
+#qda_results <- qda(cohort ~., sncrna_norm_df_bl_t_sig_bl)
+
+lda_pd_plot <-
+  ggplot(data = lda_df, 
+       mapping = aes(x = lda.LD1, y = lda.LD2, color = outcome)) + 
+  geom_point(size = 2, alpha = 0.7) +
+  labs(x = "LD1", y = "LD2") +
+  theme_classic() +
+  stat_ellipse(aes(fill = outcome), geom = "polygon", alpha = 0.3) +
+  geom_hline(yintercept = 0, size = .2) + 
+  geom_vline(xintercept = 0, size = .2) +
+  geom_segment(data = data_lda_top8,
+                      aes(x = 0, y = 0,
+                          xend = x_end, yend = y_end,
+                          shape = NULL, linetype = NULL),
+                      arrow=arrow(length=unit(0.1,"mm")),
+                      color="black") +
+  geom_text(data = data_lda_top8,
+            aes(y = y_end, x = x_end, 
+                label = varnames),
+            size = 2.5, vjust = 1, hjust = 0, colour = "black") +
+  xlab("LD1") +
+  ylab("LD2") +
+  ggtitle("LDA biplot - PD-t0 vs. PD-t4 vs. PD-t8 patients")
+
+lda_pd_plot
+
+ggsave("../figures/subplots/lda_pd_plot.png", 
+       plot = lda_pd_plot,
+       width = 2500,
+       height = 1500,
+       units = "px")
+```
+
+
+
