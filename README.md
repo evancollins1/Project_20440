@@ -2,6 +2,8 @@
 
 Authors: Evan Collins and Brian Cheng
 
+*Note that this repo has been updated with scripts and figures to reflect the first draft; however, this README document is outdated. It will be updated prior to submitting the final draft.*
+
 This repository is for the 20.440 final project at MIT. The objective of this project is to evaluate the small noncoding RNA (sncRNA) expression profiles from whole blood that are significantly different between healthy, prodromal (at risk), and Parkinson's disease (PD) subjects. These findings will in turn enable us to build models to predict PD risk using machine learning.
 
 Data for this project is sourced from the Parkinson's Progression Markers Initiative (PPMI) database. Brian and I obtained access to PPMI by signing user agreements. As part of the user agreement, we cannot make public any raw data from PPMI. Professor Blainey has allowed this. 
