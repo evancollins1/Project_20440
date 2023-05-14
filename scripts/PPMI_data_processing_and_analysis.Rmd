@@ -1,16 +1,55 @@
 ---
-title: "sncRNA PPMI data processing"
+title: "MIT 20.440 Final Project: sncRNA transcriptomics as a predictive marker of Parkinson’s disease - all data analysis besides machine learning"
+author: "Evan Collins and Brian Cheng"
+date: "1 May 2023"
 output: html_document
 ---
 
-# Load necessary packages
+This R markdown document is best viewed and run in RStudio. Running each chunk will result in the production of all figures (besides those involving machine learning) as featured in our MIT 20.440 final project entitled *sncRNA transcriptomics as a predictive marker of Parkinson’s disease*.
+
+# 0. Load necessary packages
 
 ```{r, warning = FALSE, message = FALSE}
-# All code written by Evan Collins for MIT 20.440 project
+# All R code written by Evan Collins for MIT 20.440 project
 # All data acquired from Parkinson's Progression Markers Initiative (PPMI)
-# 10 April 2023
-# Any questions can be sent to evantomcollins@gmail.com
+# 1 May 2023
+# Any questions can be sent to evanc@mit.edu
 
+# Install packages if necessary
+install.packages("data.table",
+                 version = "1.14.8",
+                 repos = "https://cloud.r-project.org")
+install.packages("umap", 
+                 version = "0.2.10.0",
+                 repos = "https://cloud.r-project.org")
+install.packages("ggplot2",
+                 version = "3.4.2",
+                 repos = "https://cloud.r-project.org")
+install.packages("ggprism", 
+                 version = "1.0.4",
+                 repos = "https://cloud.r-project.org")
+install.packages("rstatix",
+                 version = "0.7.2",
+                 repos = "https://cloud.r-project.org")
+install.packages("factoextra", 
+                 version = "1.0.7",
+                 repos = "https://cloud.r-project.org")
+install.packages("MASS",
+                 version = "7.3.58.3",
+                 repos = "https://cloud.r-project.org")
+install.packages("dplyr", 
+                 version = "1.1.1",
+                 repos = "https://cloud.r-project.org")
+install.packages("ggpubr",
+                 version = "0.6.0",
+                 repos = "https://cloud.r-project.org")
+install.packages("BiocManager",
+                 version = "1.30.20",
+                 repos = "https://cloud.r-project.org")
+BiocManager::install("DESeq2")
+BiocManager::install('EnhancedVolcano')
+
+# Load packages
 library(data.table)
 library(umap)
 library(ggplot2)
@@ -19,35 +58,36 @@ library(rstatix)
 library(factoextra)
 library(MASS)
 library(dplyr)
-#install.packages("BiocManager")
-#BiocManager::install("DESeq2")
-#BiocManager::install('EnhancedVolcano')
+library(ggpubr)
+library(BiocManager)
 library(EnhancedVolcano)
 library(DESeq2)
 ```
 
-# Initial sncRNA and clinical data processing
+# 0. Initial sncRNA and clinical data processing
 
 (Due to data usage agreements, note that PPMI data is not included in the GitHub repo)
 
 ```{r}
 # Load sncrna raw data
-sncrna_df <- as.data.frame(fread("../data/PPMI_sncRNAcounts/counts/sncrna_quantification_matrix_raw.csv"))
+sncrna_df <- as.data.frame(fread("Data/PPMI_sncRNAcounts/counts/sncrna_quantification_matrix_raw.csv"))
 
 # Get patients list
 PATNO_list <- gsub("\\..*","", substring(colnames(sncrna_df)[-1], 10))
-# Remove #221 (has NA in title; can figure out later)
+# Remove patient #221 (has NA in title;)
 PATNO_list_clean <- PATNO_list[-221]
+# Get unique patient ID numbers
 PATNO_list_clean <- as.integer(PATNO_list_clean)
 PATNO_unique_list <- unique(PATNO_list)
 ```
 
 ```{r}
 # Load patient dictionary file included in PPMI database
-participant_status_df <- read.csv("/Users/Evan/Desktop/MIT_Courses/20.440/Project/../data/Participant_Status.csv")
+participant_status_df <- read.csv("Data/Participant_Status.csv")
 ```
 
 ```{r}
+# Further patient processing
 # 335 of the patients are not in Participant_Status.csv
 # Remove them
 PATNO_list_clean <- PATNO_list[PATNO_list %in% participant_status_df$PATNO]
@@ -86,12 +126,722 @@ for (i in 1:nrow(patient_info_df)){
 table(patient_info_df$cohort)
 ```
 
-# Figure 1 - PCA biplot from clinical data for PD and prodromal subjects
+Note Figure 1 as featured in the write-up is a methods-based figure not rendered using R.
+
+
+# Figure 2 - UMAP and LDA of all sncRNAs
 
 ```{r}
+# UMAP
+# Create baseline only sncRNA dataframe
+sncrna_df_bl <- sncrna_df_clean[, grepl("BL", colnames(sncrna_df_clean))]
+sncrna_df_bl_t <- as.data.frame(t(sncrna_df_bl)) # transpose such that rows are patients; columns are transcripts
+PATNO_bl_list <- gsub("\\..*","", substring(rownames(sncrna_df_bl_t), 10))
+# Make list of which cohort each patient belong to
+cohort_bl_list <- c()
+for (i in 1:length(PATNO_bl_list)){
+  cohort_bl_list[i] <- participant_status_df$COHORT_DEFINITION[participant_status_df$PATNO == PATNO_bl_list[i]]
+}
+cohort_bl_list[cohort_bl_list == "Healthy Control"] <- "Healthy"
+cohort_bl_list[cohort_bl_list == "Parkinson's Disease"] <- "PD"
+# Read normalized data counts
+sncrna_norm_df <- as.data.frame(fread("Data/PPMI_sncRNAcounts/counts/sncrna_quantification_matrix_rpm_norm.csv"))
+rownames(sncrna_norm_df) <- sncrna_norm_df$Reference
+sncrna_norm_df <- sncrna_norm_df[-1]
+sncrna_norm_df_clean <- sncrna_norm_df[, c(PATNO_list %in% PATNO_list_clean)]
+sncrna_norm_df_bl <- sncrna_norm_df_clean[, grepl("BL", colnames(sncrna_norm_df_clean))]
+sncrna_norm_df_bl_t <- as.data.frame(t(sncrna_norm_df_bl))
+
+bl_umap <- umap(sncrna_norm_df_bl_t, n_components = 2)
+bl_umap_df <- data.frame("cohort" = cohort_bl_list, "UMAP1" = bl_umap$layout[,1], "UMAP2" = bl_umap$layout[,2])
+
+bl_umap <- ggplot(
+  bl_umap_df[!bl_umap_df$cohort == "SWEDD", ], 
+  aes(x = UMAP1, y = UMAP2, color = cohort)
+  ) + 
+  geom_point(alpha = 0.9) + 
+  labs(x = "UMAP 1", y = "UMAP 2") +
+  ggtitle("UMAP: all sncRNAs at baseline") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(
+    plot.title = element_text(size = 15, face = "bold"),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 15),
+    legend.title = element_text(size = 12), 
+    legend.text = element_text(size = 12)
+        ) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  theme(legend.title=element_blank())
+
+bl_umap
+
+# optionally save
+#ggsave("figures/subplots/fig2_umap.png", 
+#       plot = bl_umap,
+#       width = 2000,
+#       height = 1500,
+#       units = "px")
+```
+
+
+```{r}
+# LDA
+# process data by removing SWEDD cohort
+sncrna_df_bl_t_lda <- sncrna_df_bl_t[-which(cohort_bl_list == "SWEDD"), ]
+# Run PCA
+pca_results_for_lda <- prcomp(sncrna_norm_df_bl_t[-which(cohort_bl_list == "SWEDD"), ], center = TRUE)
+# remove sncRNAs with zero values across all patients
+sncrna_df_bl_t_pca <- sncrna_norm_df_bl_t[vapply(sncrna_norm_df_bl_t, function(x) length(unique(x)) > 1, logical(1L))]
+pca_results_lda <- prcomp(sncrna_df_bl_t_pca[-which(cohort_bl_list == "SWEDD"), ], center = TRUE, scale = TRUE)
+fviz_eig(pca_results_for_lda)
+which(cohort_bl_list == "SWEDD")
+pca_results_for_lda_top5 <- as.data.frame(pca_results_for_lda$x[ ,c(1:5)])
+pca_results_for_lda_top5$cohort <- cohort_bl_list[-which(cohort_bl_list == "SWEDD")]
+# Run LDA on top 5 PCs
+lda_results <- lda(cohort ~., pca_results_for_lda_top5)
+lda_predictions <- predict(lda_results)
+lda_df <- data.frame("outcome" = pca_results_for_lda_top5$cohort,
+                     "lda" = lda_predictions$x)
+lda_plot <-
+  ggplot(data = lda_df[!lda_df$lda.LD2 < -8, ], # remove single outlier 
+       mapping = aes(x = lda.LD1, y = lda.LD2, color = outcome)) + 
+  geom_point(size = 2, alpha = 0.7) +
+  labs(x = "LD1", y = "LD2") +
+  theme_classic() +
+  stat_ellipse(aes(fill = outcome), geom = "polygon", alpha = 0.1) +
+  geom_hline(yintercept = 0, size = .2) + 
+  geom_vline(xintercept = 0, size = .2) +
+  xlab("LD1") +
+  ylab("LD2") +
+  ggtitle("LDA: top 5 PCs from all sncRNAs at baseline") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+    theme(
+      plot.title = element_text(size = 15, face = "bold"),
+      axis.title = element_text(size = 15),
+      axis.text = element_text(size = 15),
+      legend.title = element_text(size = 12), 
+      legend.text = element_text(size = 12)
+          ) +
+    guides(color = guide_legend(override.aes = list(size = 4))) +
+    theme(legend.title=element_blank())
+
+lda_plot
+
+# optionally save
+#ggsave("figures/subplots/fig2_lda_plot.png", 
+#       plot = lda_plot,
+#       width = 2000,
+#       height = 1500,
+#       units = "px")
+```
+
+
+# Figure 2 - Differential expression analysis of sncRNAs between healthy, prodromal, and PD subjects at baseline
+
+```{r}
+# Prepare DE analysis
+# Convert all columns to integers
+sncrna_df_bl <- as.data.frame(lapply(sncrna_df_bl, as.integer))
+rownames(sncrna_df_bl) <- sncrna_df$Reference
+
+meta_df_bl <- data.frame("cohort" = cohort_bl_list)
+rownames(meta_df_bl) <- colnames(sncrna_df_bl)
+
+dds_bl <- DESeqDataSetFromMatrix(
+  countData = sncrna_df_bl, 
+  colData = meta_df_bl, 
+  design = ~cohort
+  )
+
+dds_bl$cohort <- factor(dds_bl$cohort, levels = c("Healthy", "PD", "Prodromal", "SWEDD"))
+dds_bl <- DESeq(dds_bl)
+```
+
+
+```{r}
+# Parkinson's vs. healthy
+res_bl_pd_h <- results(
+  dds_bl, 
+  contrast = c("cohort", "PD", "Healthy")
+  )
+
+res_bl_pd_h <- lfcShrink(
+  dds_bl,
+  contrast = c("cohort", "PD", "Healthy"), 
+  res = res_bl_pd_h, type = "normal"
+  )
+
+res_bl_pd_h_df <- as.data.frame(res_bl_pd_h)
+
+res_bl_pd_h_df <- read.csv("Data/res_bl_pd_h_df.csv")
+
+volcano_bl_pd_h <- EnhancedVolcano(
+   res_bl_pd_h_df,
+   lab = sncrna_df$Reference,
+   x = 'log2FoldChange',
+   y = 'pvalue',
+   title = 'PD vs. Healthy',
+   subtitle = "sncRNASeq (at baseline)",
+   caption = paste(nrow(res_bl_pd_h_df), "sncRNA transcripts analyzed"),
+   pCutoff = 10e-5,
+   FCcutoff = 1, # also tried 0.5
+   pointSize = 3.0,
+   labSize = 4.0,
+   xlim = c(-2.5, 2.5)
+ )
+
+volcano_bl_pd_h
+
+# optionally save
+#ggsave("figures/subplots/fig3_volcano_bl_pd_h.png", 
+#       plot = volcano_bl_pd_h,
+#       width = 2500,
+#       height = 3000,
+#       units = "px")
+
+# why are there many NA for padj = https://support.bioconductor.org/p/9135436/
+```
+
+```{r}
+# PD vs. prodromal
+res_bl_pd_p <- results(
+  dds_bl, 
+  contrast = c("cohort", "PD", "Prodromal")
+  )
+
+res_bl_pd_p <- lfcShrink(
+  dds_bl,
+  contrast = c("cohort", "PD", "Prodromal"), 
+  res = res_bl_pd_p, type = "normal"
+  )
+
+summary(res_bl_pd_p)
+
+res_bl_pd_p_df <- as.data.frame(res_bl_pd_p)
+
+res_bl_pd_p_df <- read.csv("Data/res_bl_pd_p_df.csv")
+
+volcano_bl_pd_p <- EnhancedVolcano(
+   res_bl_pd_p_df,
+   lab = sncrna_df$Reference,
+   x = 'log2FoldChange',
+   y = 'pvalue',
+   title = 'PD vs. Prodromal',
+   subtitle = "sncRNASeq (at baseline)",
+   caption = paste(nrow(res_bl_pd_p_df), "sncRNA transcripts analyzed"),
+   pCutoff = 10e-5,
+   FCcutoff = 1, # also tried 0.5
+   pointSize = 3.0,
+   labSize = 4.0,
+   xlim = c(-2.5, 2.5)
+ )
+
+volcano_bl_pd_p
+
+# optionally save
+#ggsave("figures/subplots/fig3_volcano_bl_pd_p.png", 
+#       plot = volcano_bl_pd_p,
+#       width = 2500,
+#       height = 3000,
+#       units = "px")
+```
+
+```{r}
+# Prodromal vs. healthy
+res_bl_p_h <- results(
+  dds_bl, 
+  contrast = c("cohort", "Prodromal", "Healthy")
+  )
+
+res_bl_p_h <- lfcShrink(
+  dds_bl,
+  contrast = c("cohort", "Prodromal", "Healthy"), 
+  res = res_bl_p_h, type = "normal"
+  )
+
+summary(res_bl_p_h)
+
+res_bl_p_h_df <- as.data.frame(res_bl_p_h)
+
+res_bl_p_h_df <- read.csv("Data/res_bl_p_h_df.csv")
+
+volcano_bl_p_h <- EnhancedVolcano(
+   res_bl_p_h_df,
+   lab = sncrna_df$Reference,
+   x = 'log2FoldChange',
+   y = 'pvalue',
+   title = 'Prodromal vs. Healthy',
+   subtitle = "sncRNASeq (at baseline)",
+   caption = paste(nrow(res_bl_p_h_df), "sncRNA transcripts analyzed"),
+   pCutoff = 10e-5,
+   FCcutoff = 1, # also tried 0.5
+   pointSize = 3.0,
+   labSize = 4.0,
+   xlim = c(-2.5, 2.5)
+ )
+
+volcano_bl_p_h
+
+# optionally save
+#ggsave("../figures/subplots/volcano_bl_p_h.png", 
+#       plot = volcano_bl_p_h,
+#       width = 2500,
+#       height = 3000,
+#      units = "px")
+```
+
+
+# Figure 3 - Number of differentially expressed sncRNAs in PD and prodromal subjects varies by age
+
+```{r}
+# Data processing to assign patients into age cohort by 10s of years
+bl_patients <- gsub("\\..*","", substring(colnames(sncrna_norm_df_bl), 10))
+bl_cohorts <- sncrna_cohort_full_list[grepl("BL", colnames(sncrna_norm_df_clean))]
+
+bl_ages <- c()
+for (i in 1:length(bl_patients)){
+  bl_ages[i] <- participant_status_df$ENROLL_AGE[participant_status_df$PATNO == bl_patients[i]]
+}
+
+sncrna_df_bl_w_age <- sncrna_df_bl[, !is.na(bl_ages)]
+
+bl_patients_w_age <- bl_patients[!is.na(bl_ages)]
+bl_cohorts <- sncrna_cohort_full_list[grepl("BL", colnames(sncrna_norm_df_clean))]
+bl_cohorts_w_age <- bl_cohorts[!is.na(bl_ages)]
+
+bl_ages_clean <- round(bl_ages[!is.na(bl_ages)]) # round to nearest 10 age
+bl_ages_group_clean <- round(bl_ages_clean/10)*10 # round to nearest 10 age
+
+bl_demographics_df <- data.frame("patno" = bl_patients_w_age,
+                                 "cohort" = bl_cohorts_w_age,
+                                 "age" = bl_ages_clean,
+                                 "age_group" = bl_ages_group_clean)
+
+# Function to run DESeq2 on select cohort and age bracket
+deseq_age_test <- function(cohort_of_interest, age_of_interest){
+  exp_index <- which((bl_demographics_df$cohort == cohort_of_interest) & (bl_demographics_df$age == age_of_interest))
+  control_index <- which((bl_demographics_df$cohort == "Healthy") & (bl_demographics_df$age == age_of_interest))
+  exp_data <- sncrna_df_bl_w_age[,exp_index]
+  control_data <- sncrna_df_bl_w_age[,control_index]
+  both_data <- cbind(control_data, exp_data)
+  meta_df <- data.frame("cohort" = c(rep("Healthy", ncol(control_data)), rep(cohort_of_interest, ncol(exp_data))))
+  rownames(meta_df) <- c(colnames(control_data), colnames(exp_data))
+  # Run DESeq2
+  dds <- DESeqDataSetFromMatrix(
+    countData = both_data, 
+    colData = meta_df, 
+    design = ~cohort
+    )
+  dds$cohort <- factor(dds$cohort, levels = c("Healthy", cohort_of_interest))
+  dds_run <- DESeq(dds)
+  results_dds <- results(
+    dds_run, 
+    contrast = c("cohort", cohort_of_interest, "Healthy")
+    )
+  results_dds_df <- as.data.frame(results_dds)
+  return(results_dds_df) # return dataframe results of DESeq2
+}
+
+# PD DE analyses by age
+pd_30_test <- deseq_age_test("PD", 30)
+pd_40_test <- deseq_age_test("PD", 40)
+pd_50_test <- deseq_age_test("PD", 50)
+pd_60_test <- deseq_age_test("PD", 60)
+pd_70_test <- deseq_age_test("PD", 70)
+pd_80_test <- deseq_age_test("PD", 80)
+
+# Prodromal DE analyses by age
+p_40_test <- deseq_age_test("Prodromal", 40)
+p_50_test <- deseq_age_test("Prodromal", 50)
+p_60_test <- deseq_age_test("Prodromal", 60)
+p_70_test <- deseq_age_test("Prodromal", 70)
+p_80_test <- deseq_age_test("Prodromal", 80)
+
+# Differentially expressed (up + down)
+# Make dataframe of results
+# P-value threshold: 10e-5
+# log2 fold change cutoff: 1 +/- 0.25
+dif_exp_age_df <- data.frame(
+  "age" = c(40, 50, 60, 70, 80, 40, 50, 60, 70, 80),
+  "cohort" = c(rep("PD", 5), rep("Prodromal", 5)),
+  "num_transcripts_1" = c(
+    length(pd_40_test$padj[!is.na(pd_40_test$padj)][(pd_40_test$padj[!is.na(pd_40_test$padj)] < 10e-5) & (abs(pd_40_test$log2FoldChange[!is.na(pd_40_test$padj)]) > 1)]),
+    length(pd_50_test$padj[!is.na(pd_50_test$padj)][(pd_40_test$padj[!is.na(pd_50_test$padj)] < 10e-5) & (abs(pd_50_test$log2FoldChange[!is.na(pd_50_test$padj)]) > 1)]),
+    length(pd_60_test$padj[!is.na(pd_60_test$padj)][(pd_40_test$padj[!is.na(pd_60_test$padj)] < 10e-5) & (abs(pd_60_test$log2FoldChange[!is.na(pd_60_test$padj)]) > 1)]),
+    length(pd_70_test$padj[!is.na(pd_70_test$padj)][(pd_40_test$padj[!is.na(pd_70_test$padj)] < 10e-5) & (abs(pd_70_test$log2FoldChange[!is.na(pd_70_test$padj)]) > 1)]),
+    length(pd_80_test$padj[!is.na(pd_80_test$padj)][(pd_40_test$padj[!is.na(pd_80_test$padj)] < 10e-5) & (abs(pd_80_test$log2FoldChange[!is.na(pd_80_test$padj)]) > 1)]),
+    length(p_40_test$padj[!is.na(p_40_test$padj)][(p_40_test$padj[!is.na(p_40_test$padj)] < 10e-5) & (abs(p_40_test$log2FoldChange[!is.na(p_40_test$padj)]) > 1)]),
+    length(p_50_test$padj[!is.na(p_50_test$padj)][(p_40_test$padj[!is.na(p_50_test$padj)] < 10e-5) & (abs(p_50_test$log2FoldChange[!is.na(p_50_test$padj)]) > 1)]),
+    length(p_60_test$padj[!is.na(p_60_test$padj)][(p_40_test$padj[!is.na(p_60_test$padj)] < 10e-5) & (abs(p_60_test$log2FoldChange[!is.na(p_60_test$padj)]) > 1)]),
+    length(p_70_test$padj[!is.na(p_70_test$padj)][(p_40_test$padj[!is.na(p_70_test$padj)] < 10e-5) & (abs(p_70_test$log2FoldChange[!is.na(p_70_test$padj)]) > 1)]),
+    length(p_80_test$padj[!is.na(p_80_test$padj)][(p_40_test$padj[!is.na(p_80_test$padj)] < 10e-5) & (abs(p_80_test$log2FoldChange[!is.na(p_80_test$padj)]) > 1)])
+  ),
+  "num_transcripts_125" = c(
+    length(pd_40_test$padj[!is.na(pd_40_test$padj)][(pd_40_test$padj[!is.na(pd_40_test$padj)] < 10e-5) & (abs(pd_40_test$log2FoldChange[!is.na(pd_40_test$padj)]) > 1.25)]),
+    length(pd_50_test$padj[!is.na(pd_50_test$padj)][(pd_40_test$padj[!is.na(pd_50_test$padj)] < 10e-5) & (abs(pd_50_test$log2FoldChange[!is.na(pd_50_test$padj)]) > 1.25)]),
+    length(pd_60_test$padj[!is.na(pd_60_test$padj)][(pd_40_test$padj[!is.na(pd_60_test$padj)] < 10e-5) & (abs(pd_60_test$log2FoldChange[!is.na(pd_60_test$padj)]) > 1.25)]),
+    length(pd_70_test$padj[!is.na(pd_70_test$padj)][(pd_40_test$padj[!is.na(pd_70_test$padj)] < 10e-5) & (abs(pd_70_test$log2FoldChange[!is.na(pd_70_test$padj)]) > 1.25)]),
+    length(pd_80_test$padj[!is.na(pd_80_test$padj)][(pd_40_test$padj[!is.na(pd_80_test$padj)] < 10e-5) & (abs(pd_80_test$log2FoldChange[!is.na(pd_80_test$padj)]) > 1.25)]),
+    length(p_40_test$padj[!is.na(p_40_test$padj)][(p_40_test$padj[!is.na(p_40_test$padj)] < 10e-5) & (abs(p_40_test$log2FoldChange[!is.na(p_40_test$padj)]) > 1.25)]),
+    length(p_50_test$padj[!is.na(p_50_test$padj)][(p_40_test$padj[!is.na(p_50_test$padj)] < 10e-5) & (abs(p_50_test$log2FoldChange[!is.na(p_50_test$padj)]) > 1.25)]),
+    length(p_60_test$padj[!is.na(p_60_test$padj)][(p_40_test$padj[!is.na(p_60_test$padj)] < 10e-5) & (abs(p_60_test$log2FoldChange[!is.na(p_60_test$padj)]) > 1.25)]),
+    length(p_70_test$padj[!is.na(p_70_test$padj)][(p_40_test$padj[!is.na(p_70_test$padj)] < 10e-5) & (abs(p_70_test$log2FoldChange[!is.na(p_70_test$padj)]) > 1.25)]),
+    length(p_80_test$padj[!is.na(p_80_test$padj)][(p_40_test$padj[!is.na(p_80_test$padj)] < 10e-5) & (abs(p_80_test$log2FoldChange[!is.na(p_80_test$padj)]) > 1.25)])
+  ),
+  "num_transcripts_075" = c(
+    length(pd_40_test$padj[!is.na(pd_40_test$padj)][(pd_40_test$padj[!is.na(pd_40_test$padj)] < 10e-5) & (abs(pd_40_test$log2FoldChange[!is.na(pd_40_test$padj)]) > 0.75)]),
+    length(pd_50_test$padj[!is.na(pd_50_test$padj)][(pd_40_test$padj[!is.na(pd_50_test$padj)] < 10e-5) & (abs(pd_50_test$log2FoldChange[!is.na(pd_50_test$padj)]) > 0.75)]),
+    length(pd_60_test$padj[!is.na(pd_60_test$padj)][(pd_40_test$padj[!is.na(pd_60_test$padj)] < 10e-5) & (abs(pd_60_test$log2FoldChange[!is.na(pd_60_test$padj)]) > 0.75)]),
+    length(pd_70_test$padj[!is.na(pd_70_test$padj)][(pd_40_test$padj[!is.na(pd_70_test$padj)] < 10e-5) & (abs(pd_70_test$log2FoldChange[!is.na(pd_70_test$padj)]) > 0.75)]),
+    length(pd_80_test$padj[!is.na(pd_80_test$padj)][(pd_40_test$padj[!is.na(pd_80_test$padj)] < 10e-5) & (abs(pd_80_test$log2FoldChange[!is.na(pd_80_test$padj)]) > 0.75)]),
+    length(p_40_test$padj[!is.na(p_40_test$padj)][(p_40_test$padj[!is.na(p_40_test$padj)] < 10e-5) & (abs(p_40_test$log2FoldChange[!is.na(p_40_test$padj)]) > 0.75)]),
+    length(p_50_test$padj[!is.na(p_50_test$padj)][(p_40_test$padj[!is.na(p_50_test$padj)] < 10e-5) & (abs(p_50_test$log2FoldChange[!is.na(p_50_test$padj)]) > 0.75)]),
+    length(p_60_test$padj[!is.na(p_60_test$padj)][(p_40_test$padj[!is.na(p_60_test$padj)] < 10e-5) & (abs(p_60_test$log2FoldChange[!is.na(p_60_test$padj)]) > 0.75)]),
+    length(p_70_test$padj[!is.na(p_70_test$padj)][(p_40_test$padj[!is.na(p_70_test$padj)] < 10e-5) & (abs(p_70_test$log2FoldChange[!is.na(p_70_test$padj)]) > 0.75)]),
+    length(p_80_test$padj[!is.na(p_80_test$padj)][(p_40_test$padj[!is.na(p_80_test$padj)] < 10e-5) & (abs(p_80_test$log2FoldChange[!is.na(p_80_test$padj)]) > 0.75)])
+  )
+)
+
+# Overexpressed
+# Make dataframe of results
+# P-value threshold: 10e-5
+# log2 fold change cutoff: 1 +/- 0.25
+up_exp_age_df <- data.frame(
+  "age" = c(40, 50, 60, 70, 80, 40, 50, 60, 70, 80),
+  "cohort" = c(rep("PD", 5), rep("Prodromal", 5)),
+  "num_transcripts_1" = c(
+    length(pd_40_test$padj[!is.na(pd_40_test$padj)][(pd_40_test$padj[!is.na(pd_40_test$padj)] < 10e-5) & (pd_40_test$log2FoldChange[!is.na(pd_40_test$padj)] > 1)]),
+    length(pd_50_test$padj[!is.na(pd_50_test$padj)][(pd_40_test$padj[!is.na(pd_50_test$padj)] < 10e-5) & (pd_50_test$log2FoldChange[!is.na(pd_50_test$padj)] > 1)]),
+    length(pd_60_test$padj[!is.na(pd_60_test$padj)][(pd_40_test$padj[!is.na(pd_60_test$padj)] < 10e-5) & (pd_60_test$log2FoldChange[!is.na(pd_60_test$padj)] > 1)]),
+    length(pd_70_test$padj[!is.na(pd_70_test$padj)][(pd_40_test$padj[!is.na(pd_70_test$padj)] < 10e-5) & (pd_70_test$log2FoldChange[!is.na(pd_70_test$padj)] > 1)]),
+    length(pd_80_test$padj[!is.na(pd_80_test$padj)][(pd_40_test$padj[!is.na(pd_80_test$padj)] < 10e-5) & (pd_80_test$log2FoldChange[!is.na(pd_80_test$padj)] > 1)]),
+    length(p_40_test$padj[!is.na(p_40_test$padj)][(p_40_test$padj[!is.na(p_40_test$padj)] < 10e-5) & (p_40_test$log2FoldChange[!is.na(p_40_test$padj)] > 1)]),
+    length(p_50_test$padj[!is.na(p_50_test$padj)][(p_40_test$padj[!is.na(p_50_test$padj)] < 10e-5) & (p_50_test$log2FoldChange[!is.na(p_50_test$padj)] > 1)]),
+    length(p_60_test$padj[!is.na(p_60_test$padj)][(p_40_test$padj[!is.na(p_60_test$padj)] < 10e-5) & (p_60_test$log2FoldChange[!is.na(p_60_test$padj)] > 1)]),
+    length(p_70_test$padj[!is.na(p_70_test$padj)][(p_40_test$padj[!is.na(p_70_test$padj)] < 10e-5) & (p_70_test$log2FoldChange[!is.na(p_70_test$padj)] > 1)]),
+    length(p_80_test$padj[!is.na(p_80_test$padj)][(p_40_test$padj[!is.na(p_80_test$padj)] < 10e-5) & (p_80_test$log2FoldChange[!is.na(p_80_test$padj)] > 1)])
+  ),
+  "num_transcripts_125" = c(
+    length(pd_40_test$padj[!is.na(pd_40_test$padj)][(pd_40_test$padj[!is.na(pd_40_test$padj)] < 10e-5) & (pd_40_test$log2FoldChange[!is.na(pd_40_test$padj)] > 1.25)]),
+    length(pd_50_test$padj[!is.na(pd_50_test$padj)][(pd_40_test$padj[!is.na(pd_50_test$padj)] < 10e-5) & (pd_50_test$log2FoldChange[!is.na(pd_50_test$padj)] > 1.25)]),
+    length(pd_60_test$padj[!is.na(pd_60_test$padj)][(pd_40_test$padj[!is.na(pd_60_test$padj)] < 10e-5) & (pd_60_test$log2FoldChange[!is.na(pd_60_test$padj)] > 1.25)]),
+    length(pd_70_test$padj[!is.na(pd_70_test$padj)][(pd_40_test$padj[!is.na(pd_70_test$padj)] < 10e-5) & (pd_70_test$log2FoldChange[!is.na(pd_70_test$padj)] > 1.25)]),
+    length(pd_80_test$padj[!is.na(pd_80_test$padj)][(pd_40_test$padj[!is.na(pd_80_test$padj)] < 10e-5) & (pd_80_test$log2FoldChange[!is.na(pd_80_test$padj)] > 1.25)]),
+    length(p_40_test$padj[!is.na(p_40_test$padj)][(p_40_test$padj[!is.na(p_40_test$padj)] < 10e-5) & (p_40_test$log2FoldChange[!is.na(p_40_test$padj)] > 1.25)]),
+    length(p_50_test$padj[!is.na(p_50_test$padj)][(p_40_test$padj[!is.na(p_50_test$padj)] < 10e-5) & (p_50_test$log2FoldChange[!is.na(p_50_test$padj)] > 1.25)]),
+    length(p_60_test$padj[!is.na(p_60_test$padj)][(p_40_test$padj[!is.na(p_60_test$padj)] < 10e-5) & (p_60_test$log2FoldChange[!is.na(p_60_test$padj)] > 1.25)]),
+    length(p_70_test$padj[!is.na(p_70_test$padj)][(p_40_test$padj[!is.na(p_70_test$padj)] < 10e-5) & (p_70_test$log2FoldChange[!is.na(p_70_test$padj)] > 1.25)]),
+    length(p_80_test$padj[!is.na(p_80_test$padj)][(p_40_test$padj[!is.na(p_80_test$padj)] < 10e-5) & (p_80_test$log2FoldChange[!is.na(p_80_test$padj)] > 1.25)])
+  ),
+  "num_transcripts_075" = c(
+    length(pd_40_test$padj[!is.na(pd_40_test$padj)][(pd_40_test$padj[!is.na(pd_40_test$padj)] < 10e-5) & (pd_40_test$log2FoldChange[!is.na(pd_40_test$padj)] > 0.75)]),
+    length(pd_50_test$padj[!is.na(pd_50_test$padj)][(pd_40_test$padj[!is.na(pd_50_test$padj)] < 10e-5) & (pd_50_test$log2FoldChange[!is.na(pd_50_test$padj)] > 0.75)]),
+    length(pd_60_test$padj[!is.na(pd_60_test$padj)][(pd_40_test$padj[!is.na(pd_60_test$padj)] < 10e-5) & (pd_60_test$log2FoldChange[!is.na(pd_60_test$padj)] > 0.75)]),
+    length(pd_70_test$padj[!is.na(pd_70_test$padj)][(pd_40_test$padj[!is.na(pd_70_test$padj)] < 10e-5) & (pd_70_test$log2FoldChange[!is.na(pd_70_test$padj)] > 0.75)]),
+    length(pd_80_test$padj[!is.na(pd_80_test$padj)][(pd_40_test$padj[!is.na(pd_80_test$padj)] < 10e-5) & (pd_80_test$log2FoldChange[!is.na(pd_80_test$padj)] > 0.75)]),
+    length(p_40_test$padj[!is.na(p_40_test$padj)][(p_40_test$padj[!is.na(p_40_test$padj)] < 10e-5) & (p_40_test$log2FoldChange[!is.na(p_40_test$padj)] > 0.75)]),
+    length(p_50_test$padj[!is.na(p_50_test$padj)][(p_40_test$padj[!is.na(p_50_test$padj)] < 10e-5) & (p_50_test$log2FoldChange[!is.na(p_50_test$padj)] > 0.75)]),
+    length(p_60_test$padj[!is.na(p_60_test$padj)][(p_40_test$padj[!is.na(p_60_test$padj)] < 10e-5) & (p_60_test$log2FoldChange[!is.na(p_60_test$padj)] > 0.75)]),
+    length(p_70_test$padj[!is.na(p_70_test$padj)][(p_40_test$padj[!is.na(p_70_test$padj)] < 10e-5) & (p_70_test$log2FoldChange[!is.na(p_70_test$padj)] > 0.75)]),
+    length(p_80_test$padj[!is.na(p_80_test$padj)][(p_40_test$padj[!is.na(p_80_test$padj)] < 10e-5) & (p_80_test$log2FoldChange[!is.na(p_80_test$padj)] > 0.75)])
+  )
+)
+
+# Underexpressed
+# Make dataframe of results
+# P-value threshold: 10e-5
+# log2 fold change cutoff: 1 +/- 0.25
+down_exp_age_df <- data.frame(
+  "age" = c(40, 50, 60, 70, 80, 40, 50, 60, 70, 80),
+  "cohort" = c(rep("PD", 5), rep("Prodromal", 5)),
+  "num_transcripts_1" = c(
+    length(pd_40_test$padj[!is.na(pd_40_test$padj)][(pd_40_test$padj[!is.na(pd_40_test$padj)] < 10e-5) & (pd_40_test$log2FoldChange[!is.na(pd_40_test$padj)] < -1)]),
+    length(pd_50_test$padj[!is.na(pd_50_test$padj)][(pd_40_test$padj[!is.na(pd_50_test$padj)] < 10e-5) & (pd_50_test$log2FoldChange[!is.na(pd_50_test$padj)] < -1)]),
+    length(pd_60_test$padj[!is.na(pd_60_test$padj)][(pd_40_test$padj[!is.na(pd_60_test$padj)] < 10e-5) & (pd_60_test$log2FoldChange[!is.na(pd_60_test$padj)] < -1)]),
+    length(pd_70_test$padj[!is.na(pd_70_test$padj)][(pd_40_test$padj[!is.na(pd_70_test$padj)] < 10e-5) & (pd_70_test$log2FoldChange[!is.na(pd_70_test$padj)] < -1)]),
+    length(pd_80_test$padj[!is.na(pd_80_test$padj)][(pd_40_test$padj[!is.na(pd_80_test$padj)] < 10e-5) & (pd_80_test$log2FoldChange[!is.na(pd_80_test$padj)] < -1)]),
+    length(p_40_test$padj[!is.na(p_40_test$padj)][(p_40_test$padj[!is.na(p_40_test$padj)] < 10e-5) & (p_40_test$log2FoldChange[!is.na(p_40_test$padj)] < -1)]),
+    length(p_50_test$padj[!is.na(p_50_test$padj)][(p_40_test$padj[!is.na(p_50_test$padj)] < 10e-5) & (p_50_test$log2FoldChange[!is.na(p_50_test$padj)] < -1)]),
+    length(p_60_test$padj[!is.na(p_60_test$padj)][(p_40_test$padj[!is.na(p_60_test$padj)] < 10e-5) & (p_60_test$log2FoldChange[!is.na(p_60_test$padj)] < -1)]),
+    length(p_70_test$padj[!is.na(p_70_test$padj)][(p_40_test$padj[!is.na(p_70_test$padj)] < 10e-5) & (p_70_test$log2FoldChange[!is.na(p_70_test$padj)] < -1)]),
+    length(p_80_test$padj[!is.na(p_80_test$padj)][(p_40_test$padj[!is.na(p_80_test$padj)] < 10e-5) & (p_80_test$log2FoldChange[!is.na(p_80_test$padj)] < -1)])
+  ),
+  "num_transcripts_125" = c(
+    length(pd_40_test$padj[!is.na(pd_40_test$padj)][(pd_40_test$padj[!is.na(pd_40_test$padj)] < 10e-5) & (pd_40_test$log2FoldChange[!is.na(pd_40_test$padj)] < -1.25)]),
+    length(pd_50_test$padj[!is.na(pd_50_test$padj)][(pd_40_test$padj[!is.na(pd_50_test$padj)] < 10e-5) & (pd_50_test$log2FoldChange[!is.na(pd_50_test$padj)] < -1.25)]),
+    length(pd_60_test$padj[!is.na(pd_60_test$padj)][(pd_40_test$padj[!is.na(pd_60_test$padj)] < 10e-5) & (pd_60_test$log2FoldChange[!is.na(pd_60_test$padj)] < -1.25)]),
+    length(pd_70_test$padj[!is.na(pd_70_test$padj)][(pd_40_test$padj[!is.na(pd_70_test$padj)] < 10e-5) & (pd_70_test$log2FoldChange[!is.na(pd_70_test$padj)] < -1.25)]),
+    length(pd_80_test$padj[!is.na(pd_80_test$padj)][(pd_40_test$padj[!is.na(pd_80_test$padj)] < 10e-5) & (pd_80_test$log2FoldChange[!is.na(pd_80_test$padj)] < -1.25)]),
+    length(p_40_test$padj[!is.na(p_40_test$padj)][(p_40_test$padj[!is.na(p_40_test$padj)] < 10e-5) & (p_40_test$log2FoldChange[!is.na(p_40_test$padj)] < -1.25)]),
+    length(p_50_test$padj[!is.na(p_50_test$padj)][(p_40_test$padj[!is.na(p_50_test$padj)] < 10e-5) & (p_50_test$log2FoldChange[!is.na(p_50_test$padj)] < -1.25)]),
+    length(p_60_test$padj[!is.na(p_60_test$padj)][(p_40_test$padj[!is.na(p_60_test$padj)] < 10e-5) & (p_60_test$log2FoldChange[!is.na(p_60_test$padj)] < -1.25)]),
+    length(p_70_test$padj[!is.na(p_70_test$padj)][(p_40_test$padj[!is.na(p_70_test$padj)] < 10e-5) & (p_70_test$log2FoldChange[!is.na(p_70_test$padj)] < -1.25)]),
+    length(p_80_test$padj[!is.na(p_80_test$padj)][(p_40_test$padj[!is.na(p_80_test$padj)] < 10e-5) & (p_80_test$log2FoldChange[!is.na(p_80_test$padj)] < -1.25)])
+  ),
+  "num_transcripts_075" = c(
+    length(pd_40_test$padj[!is.na(pd_40_test$padj)][(pd_40_test$padj[!is.na(pd_40_test$padj)] < 10e-5) & (pd_40_test$log2FoldChange[!is.na(pd_40_test$padj)] < -0.75)]),
+    length(pd_50_test$padj[!is.na(pd_50_test$padj)][(pd_40_test$padj[!is.na(pd_50_test$padj)] < 10e-5) & (pd_50_test$log2FoldChange[!is.na(pd_50_test$padj)] < -0.75)]),
+    length(pd_60_test$padj[!is.na(pd_60_test$padj)][(pd_40_test$padj[!is.na(pd_60_test$padj)] < 10e-5) & (pd_60_test$log2FoldChange[!is.na(pd_60_test$padj)] < -0.75)]),
+    length(pd_70_test$padj[!is.na(pd_70_test$padj)][(pd_40_test$padj[!is.na(pd_70_test$padj)] < 10e-5) & (pd_70_test$log2FoldChange[!is.na(pd_70_test$padj)] < -0.75)]),
+    length(pd_80_test$padj[!is.na(pd_80_test$padj)][(pd_40_test$padj[!is.na(pd_80_test$padj)] < 10e-5) & (pd_80_test$log2FoldChange[!is.na(pd_80_test$padj)] < -0.75)]),
+    length(p_40_test$padj[!is.na(p_40_test$padj)][(p_40_test$padj[!is.na(p_40_test$padj)] < 10e-5) & (p_40_test$log2FoldChange[!is.na(p_40_test$padj)] < -0.75)]),
+    length(p_50_test$padj[!is.na(p_50_test$padj)][(p_40_test$padj[!is.na(p_50_test$padj)] < 10e-5) & (p_50_test$log2FoldChange[!is.na(p_50_test$padj)] < -0.75)]),
+    length(p_60_test$padj[!is.na(p_60_test$padj)][(p_40_test$padj[!is.na(p_60_test$padj)] < 10e-5) & (p_60_test$log2FoldChange[!is.na(p_60_test$padj)] < -0.75)]),
+    length(p_70_test$padj[!is.na(p_70_test$padj)][(p_40_test$padj[!is.na(p_70_test$padj)] < 10e-5) & (p_70_test$log2FoldChange[!is.na(p_70_test$padj)] < -0.75)]),
+    length(p_80_test$padj[!is.na(p_80_test$padj)][(p_40_test$padj[!is.na(p_80_test$padj)] < 10e-5) & (p_80_test$log2FoldChange[!is.na(p_80_test$padj)] < -0.75)])
+  )
+)
+
+# Plots
+diff_plot <-
+  ggplot(dif_exp_age_df,
+       aes(x = age,
+           y = num_transcripts_1,
+           ymin = num_transcripts_075,
+           ymax = num_transcripts_125,
+           fill = cohort,
+           color = cohort)) +
+  geom_line(linewidth = 1.5) +
+  geom_ribbon(alpha = 0.3) +
+  geom_point(aes(color = cohort), size = 3) + 
+  ggtitle("# Diff. Expressed sncRNAs (compared to Healthy)") +
+  xlab("Age (years)") +
+  ylab("Count") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(color = NULL) +
+  labs(fill = NULL)
+
+up_plot <- 
+  ggplot(up_exp_age_df,
+       aes(x = age,
+           y = num_transcripts_1,
+           ymin = num_transcripts_075,
+           ymax = num_transcripts_125,
+           fill = cohort,
+           color = cohort)) +
+  geom_line(linewidth = 1.5) +
+  geom_ribbon(alpha = 0.3) +
+  geom_point(aes(color = cohort), size = 3) + 
+  ggtitle("# Overexpressed sncRNAs") +
+  xlab("Age (years)") +
+  ylab("Count") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(color = NULL) +
+  labs(fill = NULL)
+
+down_plot <- 
+  ggplot(down_exp_age_df,
+       aes(x = age,
+           y = num_transcripts_1,
+           ymin = num_transcripts_075,
+           ymax = num_transcripts_125,
+           fill = cohort,
+           color = cohort)) +
+  geom_line(linewidth = 1.5) +
+  geom_ribbon(alpha = 0.3) +
+  geom_point(aes(color = cohort), size = 3) + 
+  ggtitle("# Underexpressed sncRNAs") +
+  xlab("Age (years)") +
+  ylab("Count") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(color = NULL) +
+  labs(fill = NULL)
+
+# Combine DE, overexpressed, and underexpressed in one plot
+age_plot <- ggarrange(diff_plot, up_plot, down_plot, ncol = 3, common.legend = TRUE, legend = "bottom")
+
+age_plot
+
+# optionally save
+#ggsave("figures/subplots/fig3_age_plot.png", 
+#       plot = age_plot,
+#       width = 4500,
+#       height = 1500,
+#       units = "px")
+```
+
+
+# Figure 4 - SNORD48 is amplified in PD patients with worsening motor symptoms over time  
+
+```{r}
+# Line plot of motor scores over time for PD subjects
+# Load UPDRS Part III clinical score data
+updrs_part3_df <- read.csv("Data/MDS-UPDRS_Part_III.csv")
+# Only consider PD patients
+sncrna_norm_df_pd <- sncrna_norm_df_clean[,which(sncrna_cohort_full_list == "PD")]
+pd_patno <- unique(gsub("\\..*", "", substring(colnames(sncrna_norm_df_pd), 10)))
+# Only consider PD patients with at least 5 visits
+num_visits_p <- c()
+for (i in 1:length(pd_patno)){
+  num_visits_p[i] <- table(grepl(paste0("\\.",pd_patno[i], "\\."), colnames(sncrna_norm_df_pd)))["TRUE"]
+}
+pd_patno_5plus_visits <- pd_patno[which(num_visits_p >= 5)] # relax to 5 in attempt 2
+sncrna_pd_5plus_df <- sncrna_df_clean[, grepl(paste(pd_patno_5plus_visits, collapse = "|"), colnames(sncrna_df_clean))]
+updrs_part3_pd_patno <- unique(updrs_part3_df$PATNO[which(updrs_part3_df$PATNO %in% pd_patno_5plus_visits)])
+updrs_part3_pd <- list()
+for (i in 1:length(updrs_part3_pd_patno)){
+  updrs_part3_pd[[i]] <- updrs_part3_df$NP3TOT[updrs_part3_df$PATNO == updrs_part3_pd_patno[i]]
+}
+# Get visit index
+visits_index <- list()
+updrs_part3_pd_with_tx_data <- list()
+for (i in 1:length(updrs_part3_pd_patno)){ # for each patient
+  colnames_i <- colnames(sncrna_norm_df_pd)[grepl(paste0("\\.",updrs_part3_pd_patno[i], "\\."), colnames(sncrna_norm_df_pd))]
+  visits_index[[i]]  <- substr(sub(".*.V", "", colnames_i), start = 1, stop = 2)
+  for (j in 1:length(visits_index[[i]])){
+    if (visits_index[[i]][j] == "PP"){
+      visits_index[[i]][j] <- as.numeric(1)
+    } else {
+      visits_index[[i]][j] <- as.numeric(visits_index[[i]][j])
+    }
+  }
+  visits_index[[i]] <- as.numeric(visits_index[[i]])
+  updrs_part3_pd_with_tx_data[[i]] <- nafill(updrs_part3_pd[[i]][visits_index[[i]]], type = "locf")
+  updrs_part3_pd_with_tx_data[[i]] <- nafill(updrs_part3_pd_with_tx_data[[i]], type = "nocb")
+}
+
+# Have a +/- 8 change in UPDRS Part III score over the 5 visits
+# to be considered improved or worsened, respectively
+updrs_part3_pd_with_tx_data_change_large <- c()
+for (i in 1:length(updrs_part3_pd_with_tx_data)){
+  if (updrs_part3_pd_with_tx_data[[i]][length(updrs_part3_pd_with_tx_data[[i]])] - updrs_part3_pd_with_tx_data[[i]][1] > 8){
+    updrs_part3_pd_with_tx_data_change_large[i] <- "worsened"
+  } else if (updrs_part3_pd_with_tx_data[[i]][length(updrs_part3_pd_with_tx_data[[i]])] - updrs_part3_pd_with_tx_data[[i]][1] < -8){
+    updrs_part3_pd_with_tx_data_change_large[i] <- "improved"
+  } else{
+    updrs_part3_pd_with_tx_data_change_large[i] <- "no_change"
+  }
+}
+
+updrs_part3_pd_with_tx_data_df <- as.data.frame(updrs_part3_pd_with_tx_data)
+colnames(updrs_part3_pd_with_tx_data_df) <- c(1:ncol(updrs_part3_pd_with_tx_data_df))
+updrs_part3_pd_with_tx_data_df$visit <- c("V1 (BL)", "V2", "V3", "V4", "V5")
+updrs_part3_pd_with_tx_data_df_v2 <- melt(updrs_part3_pd_with_tx_data_df,  id.vars = "visit", variable.name = "series")
+updrs_part3_pd_with_tx_data_df_v2$`Motor symptoms` <- NA
+for (i in 1:nrow(updrs_part3_pd_with_tx_data_df_v2)){
+  if (updrs_part3_pd_with_tx_data_df_v2$series[i] %in% which(updrs_part3_pd_with_tx_data_change_large == "improved")){
+    updrs_part3_pd_with_tx_data_df_v2$`Motor symptoms`[i] <- "Improved"
+  } else if (updrs_part3_pd_with_tx_data_df_v2$series[i] %in% which(updrs_part3_pd_with_tx_data_change_large == "worsened")){
+    updrs_part3_pd_with_tx_data_df_v2$`Motor symptoms`[i] <- "Worsened"
+  } else if (updrs_part3_pd_with_tx_data_df_v2$series[i] %in% which(updrs_part3_pd_with_tx_data_change_large == "no_change")){
+    updrs_part3_pd_with_tx_data_df_v2$`Motor symptoms`[i] <- "No change"
+  }
+}
+
+updrs_imp_wor_line_plot <-
+ggplot(updrs_part3_pd_with_tx_data_df_v2, aes(x = visit, value)) + 
+  geom_line(aes(group = series, color = `Motor symptoms`), alpha = 0.5, size = 0.7) +
+  scale_color_manual(values=c("#00bf29", "#c2c2c2", "#ff0000")) +
+  ggtitle("Motor score of PD subjects over 5 visits") +
+  ylab("Motor impairment score (UPDRS III)") +
+  xlab("Visit") + 
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+    theme(
+      plot.title = element_text(size = 15, face = "bold"),
+      axis.title = element_text(size = 15),
+      axis.text = element_text(size = 15),
+      legend.title = element_text(size = 12), 
+      legend.text = element_text(size = 12)
+          ) +
+    guides(color = guide_legend(override.aes = list(size = 4))) +
+    theme(legend.title=element_blank())
+
+updrs_imp_wor_line_plot
+
+# optionally save
+#ggsave("figures/subplots/fig4_updrs_imp_wor_line_plot.png", 
+#       plot = updrs_imp_wor_line_plot,
+#       width = 2000,
+#       height = 1300,
+#       units = "px")
+```
+
+```{r}
+# Differential expression volcano plot for... 
+# PD subjects w/ worsening vs. unchanging motor symptoms
+# Get indices for improved, worsened, and no change PD subjects
+patno_norm_df_pd <- gsub("\\..*","", substring(colnames(sncrna_norm_df_pd)[-1], 10))
+imp_indices <- which(patno_norm_df_pd %in% updrs_part3_pd_patno[which(updrs_part3_pd_with_tx_data_change_large == "improved")])
+wor_indices <- which(patno_norm_df_pd %in% updrs_part3_pd_patno[which(updrs_part3_pd_with_tx_data_change_large == "worsened")])
+nc_indices <- which(patno_norm_df_pd %in% updrs_part3_pd_patno[which(updrs_part3_pd_with_tx_data_change_large == "no_change")])
+
+sncrna_norm_df_pd_imp <- sncrna_norm_df_pd[,imp_indices]
+sncrna_norm_df_pd_imp_BL <- sncrna_norm_df_pd_imp[, grepl("BL", colnames(sncrna_norm_df_pd_imp))]
+
+sncrna_norm_df_pd_wor <- sncrna_norm_df_pd[,wor_indices]
+sncrna_norm_df_pd_wor_BL <- sncrna_norm_df_pd_wor[, grepl("BL", colnames(sncrna_norm_df_pd_wor))]
+
+sncrna_norm_df_pd_nc <- sncrna_norm_df_pd[,nc_indices]
+sncrna_norm_df_pd_nc_BL <- sncrna_norm_df_pd_nc[, grepl("BL", colnames(sncrna_norm_df_pd_nc))]
+
+# Combine improved, worsened, and no change PD subjects into one dataframe
+sncrna_norm_df_pd_imp_wor_nc_BL <- cbind(sncrna_norm_df_pd_imp_BL, sncrna_norm_df_pd_wor_BL, sncrna_norm_df_pd_nc_BL)
+sncrna_norm_df_pd_imp_wor_nc_BL <- as.data.frame(lapply(sncrna_norm_df_pd_imp_wor_nc_BL, as.integer))
+
+meta_df <- data.frame("cohort" = c(rep("Improved", ncol(sncrna_norm_df_pd_imp_BL)), rep("Worsened", ncol(sncrna_norm_df_pd_wor_BL)), rep("No_change", ncol(sncrna_norm_df_pd_nc_BL))))
+rownames(meta_df) <- colnames(sncrna_norm_df_pd_imp_wor_nc_BL)
+
+dds <- DESeqDataSetFromMatrix(
+  countData = sncrna_norm_df_pd_imp_wor_nc_BL, 
+  colData = meta_df, 
+  design = ~cohort
+  )
+dds$cohort <- factor(dds$cohort, levels = c("Improved", "Worsened", "No_change"))
+
+dds_run <- DESeq(dds)
+
+results_dds_wor_nc <- results(
+  dds_run, 
+  contrast = c("cohort", "Worsened", "No_change")
+  )
+
+#results_dds_wor_im <- results(
+#  dds_run, 
+#  contrast = c("cohort", "Worsened", "Improved")
+#  )
+
+results_dds_wor_nc_df <- as.data.frame(results_dds_wor_nc)
+#results_dds_wor_im_df <- as.data.frame(results_dds_wor_im)
+
+volcano_wor_nc <- 
+  EnhancedVolcano(
+   results_dds_wor_nc_df,
+   lab = sncrna_df$Reference,
+   x = 'log2FoldChange',
+   y = 'pvalue',
+   title = 'PD subjects w/ worsening vs. unchanging motor symptoms',
+   subtitle = "sncRNASeq (at baseline)",
+   caption = paste(nrow(sncrna_df), "sncRNA transcripts analyzed"),
+   pCutoff = 10e-5,
+   FCcutoff = 1, # also tried 0.5
+   pointSize = 3.0,
+   labSize = 4.0,
+   xlim = c(-2.5, 2.5)
+ )
+
+volcano_wor_nc
+
+# optionally save
+#ggsave("figures/subplots/fig4_volcano_wor_nc.png", 
+#       plot = volcano_wor_nc,
+#       width = 2500,
+#       height = 3000,
+#       units = "px")
+```
+
+# Supplementary 1 - PCA biplot from clinical data - PD vs. prodromal subjects
+
+```{r}
+# Figure 1 - PCA biplot from clinical data for PD and prodromal subjects
+
 # Load .csv datasets for prodromal cohort and Parkinson's disease (PD) cohort
-prodromal_df <- read.csv("/Users/Evan/Desktop/MIT_Courses/20.440/Pset/Pset4/sandbox/../data/PPMI_Prodromal_Cohort_BL_to_Year_1_Dataset_Apr2020.csv")
-pd_df <- read.csv("/Users/Evan/Desktop/MIT_Courses/20.440/Pset/Pset4/sandbox/../data/PPMI_Original_Cohort_BL_to_Year_5_Dataset_Apr2020.csv")
+prodromal_df <- read.csv("Data/PPMI_Prodromal_Cohort_BL_to_Year_1_Dataset_Apr2020.csv")
+pd_df <- read.csv("Data/PPMI_Original_Cohort_BL_to_Year_5_Dataset_Apr2020.csv")
 
 # Keep columns that are shared between the two datasets
 pd_df_shared <- pd_df[, colnames(pd_df) %in% colnames(prodromal_df)]
@@ -143,20 +893,7 @@ pd_prodromal_df$cohort <- as.factor(pd_prodromal_df$cohort)
 # Final dimensions are 712 patients by 78 variables (+ cohort variable)
 # dim(pd_prodromal_df)
 
-table(pd_prodromal_df$cohort)
-```
 
-```{r}
-#library(MASS)
-# Fit the full model 
-#full.model <- glm(cohort ~., data = pd_prodromal_df, family = "binomial")
-# Stepwise regression model
-#step.model <- stepAIC(full.model, direction = "both", 
-#                      trace = FALSE)
-#summary(step.model)
-```
-
-```{r}
 # Calculate p values from GLM for each column in relation to cohort 
 p_values_by_column <- rep(NA, ncol(pd_prodromal_df))
 for (i in 2:ncol(pd_prodromal_df)){
@@ -184,9 +921,7 @@ sig_factors_clean <- sig_factors[!sig_factors %in% c("age_cat",
 
 # Make dataframe with only significant columns
 pd_prodromal_sig_df <- pd_prodromal_df[, colnames(pd_prodromal_df) %in% c("cohort", sig_factors_clean)]
-```
 
-```{r}
 # Run PCA
 pca_results <- prcomp(pd_prodromal_sig_df[-1], center = TRUE, scale = TRUE)
 
@@ -206,500 +941,19 @@ pca_biplot_fig <- fviz_pca_biplot(pca_results,
 
 pca_biplot_fig
 
-ggsave("../figures/subplots/pca_biplot_prodromal_vs_pd.png", 
-       plot = pca_biplot_fig)
+# optionally save
+#ggsave("figures/subplots/figS1_pca_biplot_prodromal_vs_pd.png", 
+#       plot = pca_biplot_fig,
+#       width = 1800,
+#       height = 1500,
+#       units = "px")
 ```
 
 
-# Figure 2 - DESeq2 volcano plots at baseline
-
-
-```{r}
-# Create baseline only sncRNA dataframe
-sncrna_df_bl <- sncrna_df_clean[, grepl("BL", colnames(sncrna_df_clean))]
-
-sncrna_df_bl_t <- as.data.frame(t(sncrna_df_bl)) # transpose such that rows are patients; columns are transcripts
-
-PATNO_bl_list <- gsub("\\..*","", substring(rownames(sncrna_df_bl_t), 10))
-
-cohort_bl_list <- c()
-for (i in 1:length(PATNO_bl_list)){
-  cohort_bl_list[i] <- participant_status_df$COHORT_DEFINITION[participant_status_df$PATNO == PATNO_bl_list[i]]
-}
-
-cohort_bl_list[cohort_bl_list == "Healthy Control"] <- "Healthy"
-cohort_bl_list[cohort_bl_list == "Parkinson's Disease"] <- "PD"
-```
-
-```{r}
-# Baseline
-sncrna_df_bl <- as.data.frame(lapply(sncrna_df_bl, as.integer))
-rownames(sncrna_df_bl) <- sncrna_df$Reference
-
-meta_df_bl <- data.frame("cohort" = cohort_bl_list)
-rownames(meta_df_bl) <- colnames(sncrna_df_bl)
-
-table(meta_df_bl$cohort)
-```
-
-## Figure 2A - PD vs. H (BL)
-
-```{r}
-dds_bl <- DESeqDataSetFromMatrix(
-  countData = sncrna_df_bl, 
-  colData = meta_df_bl, 
-  design = ~cohort
-  )
-
-dds_bl$cohort <- factor(dds_bl$cohort, levels = c("Healthy", "PD", "Prodromal", "SWEDD"))
-```
-
-```{r}
-dds_bl <- DESeq(dds_bl)
-```
-
-```{r}
-res_bl_pd_h <- results(
-  dds_bl, 
-  contrast = c("cohort", "PD", "Healthy")
-  )
-
-res_bl_pd_h <- lfcShrink(
-  dds_bl,
-  contrast = c("cohort", "PD", "Healthy"), 
-  res = res_bl_pd_h, type = "normal"
-  )
-
-summary(res_bl_pd_h)
-
-res_bl_pd_h_df <- as.data.frame(res_bl_pd_h)
-#write.csv(res_bl_pd_h_df, "../data/res_bl_pd_h_df.csv", row.names = FALSE)
-```
-
-```{r}
-res_bl_pd_h_df <- read.csv("../data/res_bl_pd_h_df.csv")
-```
-
-```{r}
- volcano_bl_pd_h <- EnhancedVolcano(
-   res_bl_pd_h_df,
-   lab = sncrna_df$Reference,
-   x = 'log2FoldChange',
-   y = 'pvalue',
-   title = 'PD vs. Healthy',
-   subtitle = "sncRNASeq (at baseline)",
-   caption = paste(nrow(res_bl_pd_h_df), "sncRNA transcripts analyzed"),
-   pCutoff = 10e-5,
-   FCcutoff = 1, # also tried 0.5
-   pointSize = 3.0,
-   labSize = 4.0,
-   xlim = c(-2.5, 2.5)
- )
-
-volcano_bl_pd_h
-
-ggsave("../figures/subplots/volcano_bl_pd_h.png", 
-       plot = volcano_bl_pd_h,
-       width = 2500,
-       height = 3000,
-       units = "px")
-
-# why are there many NA for padj = https://support.bioconductor.org/p/9135436/
-table(is.na(as.data.frame(res_bl_pd_h)$padj))
-```
-
-
-## Figure 2B - PD vs. P (BL)
-
-```{r}
-res_bl_pd_p <- results(
-  dds_bl, 
-  contrast = c("cohort", "PD", "Prodromal")
-  )
-
-res_bl_pd_p <- lfcShrink(
-  dds_bl,
-  contrast = c("cohort", "PD", "Prodromal"), 
-  res = res_bl_pd_p, type = "normal"
-  )
-
-summary(res_bl_pd_p)
-
-res_bl_pd_p_df <- as.data.frame(res_bl_pd_p)
-#write.csv(res_bl_pd_p_df, "../data/res_bl_pd_p_df.csv", row.names = FALSE)
-```
-
-```{r}
-res_bl_pd_p_df <- read.csv("../data/res_bl_pd_p_df.csv")
-```
-
-
-```{r}
- volcano_bl_pd_p <- EnhancedVolcano(
-   res_bl_pd_p_df,
-   lab = sncrna_df$Reference,
-   x = 'log2FoldChange',
-   y = 'pvalue',
-   title = 'PD vs. Prodromal',
-   subtitle = "sncRNASeq (at baseline)",
-   caption = paste(nrow(res_bl_pd_p_df), "sncRNA transcripts analyzed"),
-   pCutoff = 10e-5,
-   FCcutoff = 1, # also tried 0.5
-   pointSize = 3.0,
-   labSize = 4.0,
-   xlim = c(-2.5, 2.5)
- )
-
-volcano_bl_pd_p
-
-ggsave("../figures/subplots/volcano_bl_pd_p.png", 
-       plot = volcano_bl_pd_p,
-       width = 2500,
-       height = 3000,
-       units = "px")
-```
-
-## Figure 2C - P vs. H (BL)
-
-```{r}
-res_bl_p_h <- results(
-  dds_bl, 
-  contrast = c("cohort", "Prodromal", "Healthy")
-  )
-
-res_bl_p_h <- lfcShrink(
-  dds_bl,
-  contrast = c("cohort", "Prodromal", "Healthy"), 
-  res = res_bl_p_h, type = "normal"
-  )
-
-summary(res_bl_p_h)
-
-res_bl_p_h_df <- as.data.frame(res_bl_p_h)
-#write.csv(res_bl_p_h_df, "../data/res_bl_p_h_df.csv", row.names = FALSE)
-```
-
-```{r}
-res_bl_p_h_df <- read.csv("../data/res_bl_p_h_df.csv")
-```
-
-```{r}
- volcano_bl_p_h <- EnhancedVolcano(
-   res_bl_p_h_df,
-   lab = sncrna_df$Reference,
-   x = 'log2FoldChange',
-   y = 'pvalue',
-   title = 'Prodromal vs. Healthy',
-   subtitle = "sncRNASeq (at baseline)",
-   caption = paste(nrow(res_bl_p_h_df), "sncRNA transcripts analyzed"),
-   pCutoff = 10e-5,
-   FCcutoff = 1, # also tried 0.5
-   pointSize = 3.0,
-   labSize = 4.0,
-   xlim = c(-2.5, 2.5)
- )
-
-volcano_bl_p_h
-
-ggsave("../figures/subplots/volcano_bl_p_h.png", 
-       plot = volcano_bl_p_h,
-       width = 2500,
-       height = 3000,
-       units = "px")
-```
-
-
-# Figure 3 - Dimensionality reduction using UMAP and LDA at baseline
-
-## Figure 3A - UMAP at baseline
-
-```{r}
-# UMAP
-bl_umap <- umap(sncrna_df_bl_t, n_components = 2)
-bl_umap_df <- data.frame("cohort" = cohort_bl_list, "UMAP1" = bl_umap$layout[,1], "UMAP2" = bl_umap$layout[,2])
-```
-
-```{r}
-bl_umap <- ggplot(
-  bl_umap_df, 
-  aes(x = UMAP1, y = UMAP2, color = cohort)
-  ) + 
-  geom_point(alpha = 0.9) + 
-  labs(x = "UMAP 1", y = "UMAP 2") +
-  theme(plot.title = element_text(hjust = 0.5)) + 
-  ggtitle("PPMI Subjects") +
-  theme(
-    plot.title = element_text(size = 15, face = "bold"),
-    axis.title = element_text(size = 15),
-    axis.text = element_text(size = 15),
-    legend.title = element_text(size = 12), 
-    legend.text = element_text(size = 12)
-        ) +
-  guides(color = guide_legend(override.aes = list(size = 4)))
-
-bl_umap
-
-ggsave("../figures/subplots/bl_umap.png", 
-       plot = bl_umap,
-       width = 2500,
-       height = 3000,
-       units = "px")
-```
-
-
-## Figure 3B - LDA at baseline
-
-```{r}
-pd_p_sig_transcripts <- sncrna_df$Reference[which(res_bl_pd_p_df$padj < 10e-5 & res_bl_pd_p_df$log2FoldChange > 1)]
-pd_h_sig_transcripts <- sncrna_df$Reference[which(res_bl_pd_h_df$padj < 10e-5 & res_bl_pd_h_df$log2FoldChange < -1)]
-p_h_sig_transcripts <- sncrna_df$Reference[which(res_bl_p_h_df$padj < 10e-5 & res_bl_p_h_df$log2FoldChange < -1)]
-
-sig_bl_transcripts_df <- data.frame("transcript" = c(pd_p_sig_transcripts, pd_h_sig_transcripts, p_h_sig_transcripts),
-                                    "comparison" = c(rep("PD_vs_Prodromal", length(pd_p_sig_transcripts)),
-                                                   rep("PD_vs_Healthy", length(pd_h_sig_transcripts)),
-                                                   rep("Prodromal_vs_Healthy", length(p_h_sig_transcripts))
-                                                   )
-                                   )
-
-sig_bl_transcripts <- sig_bl_transcripts_df$transcript
-
-sncrna_norm_df <- as.data.frame(fread("../data/PPMI_sncRNAcounts/counts/sncrna_quantification_matrix_rpm_norm.csv"))
-rownames(sncrna_norm_df) <- sncrna_norm_df$Reference
-sncrna_norm_df <- sncrna_norm_df[-1]
-sncrna_norm_df_clean <- sncrna_norm_df[, c(PATNO_list %in% PATNO_list_clean)]
-sncrna_norm_df_bl <- sncrna_norm_df_clean[, grepl("BL", colnames(sncrna_norm_df_clean))]
-sncrna_norm_df_bl_t <- as.data.frame(t(sncrna_norm_df_bl))
-
-sncrna_norm_df_bl_t_sig_bl <- sncrna_norm_df_bl_t[, which(colnames(sncrna_norm_df_bl_t) %in% sig_bl_transcripts)]
-
-sncrna_norm_df_bl_t_sig_bl$cohort <- cohort_bl_list
-sncrna_norm_df_bl_t_sig_bl <- sncrna_norm_df_bl_t_sig_bl[ ,c(50, 1:49)]
-
-sncrna_norm_df_bl_t_sig_bl <- sncrna_norm_df_bl_t_sig_bl[sncrna_norm_df_bl_t_sig_bl$cohort != "SWEDD", ] # remove SWEDD patients
-```
-
-```{r}
-lda_results <- lda(cohort ~., sncrna_norm_df_bl_t_sig_bl)
-lda_predictions <- predict(lda_results)
-lda_df <- data.frame("outcome" = sncrna_norm_df_bl_t_sig_bl$cohort,
-                     "lda" = lda_predictions$x)
-
-data_lda <- data.frame(varnames = rownames(coef(lda_results)), coef(lda_results))
-data_lda_top8 <- rbind(
-  data_lda[order(abs(data_lda$LD1), decreasing = TRUE), ][c(1:4),],
-  data_lda[order(abs(data_lda$LD2), decreasing = TRUE), ][c(1:4),]
-)
-
-data_lda_top8$angle <- atan2(data_lda_top8$LD1, data_lda_top8$LD2)
-data_lda_top8$x_start <- data_lda_top8$y_start <- 0
-data_lda_top8$x_end <- cos(data_lda_top8$angle) * 3
-data_lda_top8$y_end <- sin(data_lda_top8$angle) * 3
-
-lda_bl_plot <-
-  ggplot(data = lda_df, 
-       mapping = aes(x = lda.LD1, y = lda.LD2, color = outcome)) + 
-  geom_point(size = 2, alpha = 0.7) +
-  labs(x = "LD1", y = "LD2") +
-  theme_classic() +
-  stat_ellipse(aes(fill = outcome), geom = "polygon", alpha = 0.3) +
-  geom_hline(yintercept = 0, size = .2) + 
-  geom_vline(xintercept = 0, size = .2) +
-  geom_segment(data = data_lda_top8,
-                      aes(x = 0, y = 0,
-                          xend = x_end, yend = y_end,
-                          shape = NULL, linetype = NULL),
-                      arrow=arrow(length=unit(0.1,"mm")),
-                      color="black") +
-  geom_text(data = data_lda_top8,
-            aes(y = y_end, x = x_end, 
-                label = varnames),
-            size = 2.5, vjust = 1, hjust = 0, colour = "black") +
-  xlab("LD1 (82.1%)") +
-  ylab("LD2 (17.9%)") +
-  ggtitle("LDA biplot - PD vs. prodromal vs. healthy subjects (at baseline)")
-
-lda_bl_plot
-
-ggsave("../figures/subplots/lda_bl_plot.png", 
-       plot = lda_bl_plot,
-       width = 2000,
-       height = 2000,
-       units = "px")
-```
-
-
-# Figure 4
-
-## Figure 4A - DESeq2 on P-t0 vs. P-t4
-
-```{r}
-sncrna_norm_df_p <- sncrna_norm_df_clean[,which(sncrna_cohort_full_list == "Prodromal")]
-
-prodromal_patno <- unique(gsub("\\..*", "", substring(colnames(sncrna_norm_df_p), 10)))
-
-num_visits_p <- c()
-for (i in 1:length(prodromal_patno)){
-  num_visits_p[i] <- table(grepl(prodromal_patno[i], colnames(sncrna_norm_df_p)))["TRUE"]
-}
-
-# 70 prodromal patients with at least 4 visits with transcriptomics data
-p_patno_4plus_visits <- prodromal_patno[which(num_visits_p >= 4)]
-
-sncrna_p_4plus_df <- sncrna_df_clean[, grepl(paste(p_patno_4plus_visits, collapse = "|"), colnames(sncrna_df_clean))]
-
-sncrna_p_4plus_BL_V4_df <- sncrna_pd_clinical_df[, grepl("BL|V04", colnames(sncrna_p_4plus_df))]
-sncrna_p_4plus_BL_V4_df <- as.data.frame(lapply(sncrna_p_4plus_BL_V4_df, as.integer))
-rownames(sncrna_p_4plus_BL_V4_df) <- sncrna_df$Reference
-bl_or_v4 <- colnames(sncrna_p_4plus_BL_V4_df)
-bl_or_v4[grepl("BL", bl_or_v4)] <- "BL"
-bl_or_v4[grepl("V04", bl_or_v4)] <- "V4"
-
-meta_p_4plus_BL_V4_df <- data.frame("timepoint" = bl_or_v4)
-rownames(meta_p_4plus_BL_V4_df) <- colnames(sncrna_p_4plus_BL_V4_df)
-```
-
-```{r}
-dds_p <- DESeqDataSetFromMatrix(
-  countData = sncrna_p_4plus_BL_V4_df, 
-  colData = meta_p_4plus_BL_V4_df, 
-  design = ~timepoint
-  )
-
-dds_p$timepoint <- factor(dds_p$timepoint, levels = c("BL", "V4"))
-```
-
-```{r}
-dds_p <- DESeq(dds_p)
-```
-
-```{r}
-res_p_b_v4 <- results(
-  dds_p, 
-  contrast = c("timepoint", "BL", "V4")
-  )
-
-res_p_b_v4 <- lfcShrink(
-  dds_p,
-  contrast = c("timepoint", "BL", "V4"), 
-  res = res_p_b_v4, type = "normal"
-  )
-
-summary(res_p_b_v4)
-
-res_p_b_v4_df <- as.data.frame(res_p_b_v4)
-write.csv(res_p_b_v4_df, "../data/res_p_b_v4_df.csv", row.names = FALSE)
-```
-
-```{r}
- volcano_p_bl_v4 <- EnhancedVolcano(
-   res_p_b_v4_df,
-   lab = sncrna_df$Reference,
-   x = 'log2FoldChange',
-   y = 'pvalue',
-   title = 'Prodomal-t0 vs. Prodomal-t4',
-   subtitle = "sncRNASeq",
-   caption = paste(nrow(res_p_b_v4_df), "sncRNA transcripts analyzed"),
-   pCutoff = 10e-5,
-   FCcutoff = 1,
-   pointSize = 3.0,
-   labSize = 4.0,
-   xlim = c(-2.5, 2.5)
- )
-
-volcano_p_bl_v4
-
-ggsave("../figures/subplots/volcano_p_bl_v4.png", 
-       plot = volcano_p_bl_v4,
-       width = 2500,
-       height = 3000,
-       units = "px")
-```
-
-
-## Figure 4B - DESeq2 on PD-t0 vs. PD-t4
-
-```{r}
-pd_clinical_df <- read.csv("/Users/Evan/Desktop/MIT_Courses/20.440/Pset/Pset4/sandbox/../data/PPMI_Original_Cohort_BL_to_Year_5_Dataset_Apr2020.csv")
-
-pd_clinical_patients <- unique(pd_clinical_df$PATNO)
-
-sncrna_pd_clinical_df <- sncrna_df_clean[, grepl(paste(pd_clinical_patients, collapse = "|"), colnames(sncrna_df_clean))]
-
-sncrna_pd_clinical_BL_V8_df <- sncrna_pd_clinical_df[, grepl("BL|V08", colnames(sncrna_pd_clinical_df))]
-sncrna_pd_clinical_BL_V8_df <- as.data.frame(lapply(sncrna_pd_clinical_BL_V8_df, as.integer))
-rownames(sncrna_pd_clinical_BL_V8_df) <- sncrna_df$Reference
-bl_or_v8 <- colnames(sncrna_pd_clinical_BL_V8_df)
-bl_or_v8[grepl("BL", bl_or_v8)] <- "BL"
-bl_or_v8[grepl("V08", bl_or_v8)] <- "V8"
-
-meta_pd_clinical_BL_V8_df <- data.frame("timepoint" = bl_or_v8)
-rownames(meta_pd_clinical_BL_V8_df) <- colnames(sncrna_pd_clinical_BL_V8_df)
-```
-
-```{r}
-dds_pd <- DESeqDataSetFromMatrix(
-  countData = sncrna_pd_clinical_BL_V8_df, 
-  colData = meta_pd_clinical_BL_V8_df, 
-  design = ~timepoint
-  )
-
-dds_pd$timepoint <- factor(dds_pd$timepoint, levels = c("BL", "V8"))
-```
-
-```{r}
-dds_pd <- DESeq(dds_pd)
-```
-
-```{r}
-res_pd_bl_v8 <- results(
-  dds_pd, 
-  contrast = c("timepoint", "BL", "V8")
-  )
-
-res_pd_bl_v8 <- lfcShrink(
-  dds_pd,
-  contrast = c("timepoint", "BL", "V8"), 
-  res = res_pd_bl_v8, type = "normal"
-  )
-
-summary(res_pd_bl_v8)
-
-res_pd_bl_v8_df <- as.data.frame(res_pd_bl_v8)
-#write.csv(res_pd_bl_v8_df, "../data/res_pd_bl_v8_df.csv", row.names = FALSE)
-```
-
-```{r}
-volcano_pd_bl_v8 <- EnhancedVolcano(
- res_pd_bl_v8_df,
- lab = sncrna_df$Reference,
- x = 'log2FoldChange',
- y = 'pvalue',
- title = 'PD-t0 vs. PD-t8',
- subtitle = "sncRNASeq",
- caption = paste(nrow(res_pd_bl_v8_df), "sncRNA transcripts analyzed"),
- pCutoff = 10e-5,
- FCcutoff = 0.75,
- pointSize = 3.0,
- labSize = 4.0,
- xlim = c(-2.5, 2.5)
-)
-
-volcano_pd_bl_v8
-
-ggsave("../figures/subplots/volcano_pd_bl_v8.png", 
-       plot = volcano_pd_bl_v8,
-       width = 2500,
-       height = 3000,
-       units = "px")
-```
-
-
-
-# Figure 5 - Tracking how sncRNAs correlation with motor symptoms in prodromal patients over time
-
-## Figure 5A - Boxplots
+# Supplementary 2 - Tracking how sncRNAs correlate with motor symptoms in prodromal subjects over time
 
 ```{r, warning = FALSE}
+# Boxplots of two significant transcripts identified in DE analysis
 sncrna_norm_df_clean <- sncrna_norm_df[, c(PATNO_list %in% PATNO_list_clean)]
 sncrna_norm_df_bl <- sncrna_norm_df_clean[, grepl("BL", colnames(sncrna_norm_df_clean))]
 rownames(sncrna_norm_df_bl) <- sncrna_df$Reference
@@ -738,17 +992,18 @@ pd_p_sig_transcripts_boxplots <-
 
 pd_p_sig_transcripts_boxplots
 
-ggsave("../figures/subplots/pd_p_sig_transcripts_boxplots.png", 
-       plot = pd_p_sig_transcripts_boxplots,
-       width = 2500,
-       height = 1500,
-       units = "px")
+# optionally save
+#ggsave("figures/subplots/figS2_pd_p_sig_transcripts_boxplots.png", 
+#       plot = pd_p_sig_transcripts_boxplots,
+#       width = 2500,
+#       height = 1500,
+#       units = "px")
 ```
 
-## Figure 5B - Histogram of two significant sncRNAs
 
 ```{r}
-updrs_part3_df <- read.csv("../data/MDS-UPDRS_Part_III.csv")
+# Histogram of two significant sncRNAs identified in DE analysis
+updrs_part3_df <- read.csv("Data/MDS-UPDRS_Part_III.csv")
 
 updrs_part3_p_patno <- unique(updrs_part3_df$PATNO[which(updrs_part3_df$PATNO %in% p_patno_4plus_visits)])
 
@@ -771,9 +1026,7 @@ for (i in 1:length(updrs_part3_p_patno)){
 
 updrs_part3_p_patno_worsened <- updrs_part3_p_patno[which(updrs_part3_p_change == -1)]
 updrs_part3_p_patno_improved <- updrs_part3_p_patno[which(updrs_part3_p_change == 1)]
-```
 
-```{r}
 visits_index <- list()
 updrs_part3_p_with_tx_data <- list()
 for (i in 1:length(updrs_part3_p_patno)){ # for each patient
@@ -790,10 +1043,7 @@ for (i in 1:length(updrs_part3_p_patno)){ # for each patient
   updrs_part3_p_with_tx_data[[i]] <- nafill(updrs_part3_p[[i]][visits_index[[i]]], type = "locf")
   updrs_part3_p_with_tx_data[[i]] <- nafill(updrs_part3_p_with_tx_data[[i]], type = "nocb")
 }
-```
 
-
-```{r, warning = FALSE}
 rho_p_all <- list()
 for (i in 1:length(pd_p_sig_transcripts)){ # for each transcript
   rho_p_all[[i]] <- rep(NA, length(pd_p_sig_transcripts))
@@ -811,10 +1061,7 @@ for (i in 1:length(pd_p_sig_transcripts)){ # for each transcript
   # remove patients that did not exhibit any change in NPDRS score
   rho_p_all[[i]] <- na.omit(rho_p_all[[i]])
 }
-```
 
-
-```{r, warning = FALSE, message = FALSE}
 rho_p_all_df <- data.frame("rho" = c(rho_p_all[[1]],
                                      rho_p_all[[2]]),
                            "transcript" = c(rep(pd_p_sig_transcripts[1], length(rho_p_all[[1]])),
@@ -843,16 +1090,16 @@ pd_p_sig_transcripts_rho_hist <-
 
 pd_p_sig_transcripts_rho_hist
 
-ggsave("../figures/subplots/pd_p_sig_transcripts_rho_hist.png", 
-       plot = pd_p_sig_transcripts_rho_hist,
-       width = 2500,
-       height = 1500,
-       units = "px")
+# optionally save
+#ggsave("figures/subplots/figS2_pd_p_sig_transcripts_rho_hist.png", 
+#       plot = pd_p_sig_transcripts_rho_hist,
+#       width = 2500,
+#       height = 1500,
+#       units = "px")
 ```
 
-## Figure 5C - Top 4 sncRNAs that correlate with motor symptoms
-
 ```{r, warning = FALSE, message = FALSE}
+# Distributions of top 4 sncRNAs that correlate with motor symptoms
 # search all transcripts that have padj from DESeq2
 pd_p_all_transcripts <- rownames(res_bl_pd_p_df)[which(!is.na(res_bl_pd_p_df$padj))]
 
@@ -874,10 +1121,7 @@ for (i in 1:length(pd_p_all_transcripts)){ # for each transcript
   rho_p_all[[i]] <- na.omit(rho_p_all[[i]])
   mean_rho[i] <- mean(rho_p_all[[i]])
 }
-```
 
-
-```{r, warning = FALSE, message = FALSE}
 top10_indices_p <- order(abs(mean_rho), decreasing = TRUE)[1:10]
 # 1 had too few samples; 3 and 5 had strange distribution shape
 top4_indices_p_df <- data.frame(
@@ -917,18 +1161,17 @@ top4_transcripts_p_density <-
 
 top4_transcripts_p_density
 
-ggsave("../figures/subplots/top4_transcripts_p_density.png", 
-       plot = top4_transcripts_p_density,
-       width = 2500,
-       height = 1500,
-       units = "px")
+# optionally save
+#ggsave("figures/subplots/figS2_top4_transcripts_p_density.png", 
+#       plot = top4_transcripts_p_density,
+#       width = 2500,
+#       height = 1500,
+#       units = "px")
 ```
 
 
-## Figure 5D - Spin test
-
 ```{r, warning = FALSE, message = FALSE}
-# spin tests
+# Spin tests
 mean_rho_spin <- c()
 rho_p_all_spin <- list()
 for (i in 1:length(pd_p_all_transcripts)){ # for each transcript
@@ -976,20 +1219,21 @@ spin_top4_transcripts_p_density <-
   theme_prism()
 
 spin_top4_transcripts_p_density
-   
-ggsave("../figures/subplots/spin_top4_transcripts_p_density.png", 
-   plot = spin_top4_transcripts_p_density,
-   width = 2500,
-   height = 1500,
-   units = "px")
+
+# optionally save
+#ggsave("figures/subplots/figS2_spin_top4_transcripts_p_density.png", 
+#   plot = spin_top4_transcripts_p_density,
+#   width = 2500,
+#   height = 1500,
+#   units = "px")
 ```
 
 
-# Figure 6 - Tracking how sncRNAs correlation with motor symptoms in PD patients over time 
+# Supplementary 3 - Tracking how sncRNAs correlate with motor symptoms in PD subjects over time
 
-## Figure 6A - Histogram of five significant sncRNAs
 
 ```{r, warning = FALSE}
+# Histogram of five significant sncRNAs identified in DE analysis
 sncrna_norm_df_clean <- sncrna_norm_df[, c(PATNO_list %in% PATNO_list_clean)]
 sncrna_norm_df_bl <- sncrna_norm_df_clean[, grepl("BL", colnames(sncrna_norm_df_clean))]
 rownames(sncrna_norm_df_bl) <- sncrna_df$Reference
@@ -1019,9 +1263,6 @@ pd_h_sig_transcripts_bl_df$cohort[pd_h_sig_transcripts_bl_df$cohort == "Healthy"
 pd_h_sig_transcripts_bl_df$cohort[pd_h_sig_transcripts_bl_df$cohort == "Prodromal"] <- "P"
 pd_h_sig_transcripts_bl_df$cohort <- factor(pd_h_sig_transcripts_bl_df$cohort, levels = c("H", "P", "PD")) 
 
-```
-
-```{r}
 updrs_part3_df <- read.csv("../data/MDS-UPDRS_Part_III.csv")
 
 sncrna_norm_df_pd <- sncrna_norm_df_clean[,which(sncrna_cohort_full_list == "PD")]
@@ -1043,9 +1284,7 @@ updrs_part3_pd <- list()
 for (i in 1:length(updrs_part3_pd_patno)){
   updrs_part3_pd[[i]] <- updrs_part3_df$NP3TOT[updrs_part3_df$PATNO == updrs_part3_pd_patno[i]]
 }
-```
 
-```{r}
 visits_index <- list()
 updrs_part3_pd_with_tx_data <- list()
 for (i in 1:length(updrs_part3_pd_patno)){ # for each patient
@@ -1062,9 +1301,7 @@ for (i in 1:length(updrs_part3_pd_patno)){ # for each patient
   updrs_part3_pd_with_tx_data[[i]] <- nafill(updrs_part3_pd[[i]][visits_index[[i]]], type = "locf")
   updrs_part3_pd_with_tx_data[[i]] <- nafill(updrs_part3_pd_with_tx_data[[i]], type = "nocb")
 }
-```
 
-```{r, warning = FALSE}
 rho_pd_all <- list()
 for (i in 1:length(pd_h_sig_transcripts)){ # for each transcript
   rho_pd_all[[i]] <- rep(NA, length(pd_h_sig_transcripts))
@@ -1082,9 +1319,7 @@ for (i in 1:length(pd_h_sig_transcripts)){ # for each transcript
   # remove patients that did not exhibit any change in NPDRS score
   rho_pd_all[[i]] <- na.omit(rho_pd_all[[i]])
 }
-```
 
-```{r}
 rho_pd_all_df <- data.frame("rho" = c(rho_pd_all[[1]],
                                       rho_pd_all[[2]],
                                       rho_pd_all[[3]],
@@ -1119,15 +1354,18 @@ pd_h_sig_transcripts_rho_hist <-
 
 pd_h_sig_transcripts_rho_hist
 
-ggsave("../figures/subplots/pd_h_sig_transcripts_rho_hist.png", 
-       plot = pd_h_sig_transcripts_rho_hist,
-       width = 2500,
-       height = 1500,
-       units = "px")
+# optionally save
+#ggsave("figures/subplots/figS3_pd_h_sig_transcripts_rho_hist.png", 
+#       plot = pd_h_sig_transcripts_rho_hist,
+#       width = 2500,
+#       height = 1500,
+#       units = "px")
 ```
+
 ## Figure 6B - Top 4 sncRNAs that correlate with motor symptoms
 
 ```{r, warning = FALSE, message = FALSE}
+# Distributions of top 4 sncRNAs that correlate with motor symptoms
 # search all transcripts that have padj from DESeq2
 pd_h_all_transcripts <- sncrna_df$Reference[which(!is.na(res_bl_pd_h_df$padj))]
 
@@ -1146,9 +1384,7 @@ for (i in 1:length(pd_h_all_transcripts)){ # for each transcript
   # remove patients that did not exhibit any change in NPDRS score
   mean_pd_rho[i] <- mean(rho_pd_all[[i]], na.rm = TRUE)
 }
-```
 
-```{r, warning = FALSE, message = FALSE}
 top10_indices_pd <- order(abs(mean_pd_rho), decreasing = TRUE)[1:10]
 # 1 had too few samples; 3 and 5 had strange distribution shape
 top4_indices_pd_df <- data.frame(
@@ -1188,17 +1424,16 @@ top4_transcripts_pd_density <-
 
 top4_transcripts_pd_density
 
-ggsave("../figures/subplots/top4_transcripts_pd_density.png", 
-       plot = top4_transcripts_pd_density,
-       width = 2500,
-       height = 1500,
-       units = "px")
+# optionally save
+#ggsave("figures/subplots/figS3_top4_transcripts_pd_density.png", 
+#       plot = top4_transcripts_pd_density,
+#       width = 2500,
+#       height = 1500,
+#       units = "px")
 ```
 
-## Figure 6C - Spin tests
-
 ```{r, warning = FALSE, message = FALSE}
-# spin tests
+# Spin tests
 mean_rho_pd_spin <- c()
 rho_pd_all_spin <- list()
 for (i in 1:length(pd_h_all_transcripts)){ # for each transcript
@@ -1246,86 +1481,10 @@ spin_top4_transcripts_pd_density <-
 
 spin_top4_transcripts_pd_density
    
-ggsave("../figures/subplots/spin_top4_transcripts_pd_density.png", 
-   plot = spin_top4_transcripts_pd_density,
-   width = 2500,
-   height = 1500,
-   units = "px")
+# optionally save
+#ggsave("../figures/subplots/figS3_spin_top4_transcripts_pd_density.png", 
+#   plot = spin_top4_transcripts_pd_density,
+#   width = 2500,
+#   height = 1500,
+#   units = "px")
 ```
-
-## Figure 6D - LDA for PD-t0 vs. PD-t4 vs. PD-t8
-
-
-```{r}
-# Run LDA on PD-t0 vs. PD-t8
-
-# search all transcripts that have padj from DESeq2
-pd_h_all_transcripts <- sncrna_df$Reference[which(!is.na(res_bl_pd_h_df$padj))]
-
-sncrna_pd_clinical_norm_df <- sncrna_norm_df_clean[, grepl(paste(pd_clinical_patients, collapse = "|"), colnames(sncrna_norm_df_clean))]
-sncrna_pd_clinical_norm_BL_V4_V8_df <- sncrna_pd_clinical_norm_df[, grepl("BL|V04|V08", colnames(sncrna_pd_clinical_norm_df))]
-#sncrna_pd_clinical_norm_BL_V4_V8_df <- as.data.frame(lapply(sncrna_pd_clinical_norm_BL_V4_V8_df, as.integer))
-rownames(sncrna_pd_clinical_norm_BL_V4_V8_df) <- sncrna_df$Reference
-bl_or_v4_or_v8 <- colnames(sncrna_pd_clinical_norm_BL_V4_V8_df)
-bl_or_v4_or_v8[grepl("BL", bl_or_v4_or_v8)] <- "BL"
-bl_or_v4_or_v8[grepl("V08", bl_or_v4_or_v8)] <- "V8"
-bl_or_v4_or_v8[grepl("V04", bl_or_v4_or_v8)] <- "V4"
-
-sncrna_pd_clinical_norm_BL_V4_V8_df_t <- as.data.frame(t(sncrna_pd_clinical_norm_BL_V4_V8_df))
-sncrna_pd_clinical_norm_BL_V4_V8_df_t_clean <- sncrna_pd_clinical_norm_BL_V4_V8_df_t[, which(colnames(sncrna_pd_clinical_norm_BL_V4_V8_df_t) %in% pd_h_all_transcripts)]
-sncrna_pd_clinical_norm_BL_V4_V8_df_t_clean$timepoint <- bl_or_v4_or_v8
-
-options(expressions = 500000)
-lda_results <- lda(sncrna_pd_clinical_norm_BL_V4_V8_df_t_clean[,-ncol(sncrna_pd_clinical_norm_BL_V4_V8_df_t_clean)],
-                   grouping = sncrna_pd_clinical_norm_BL_V4_V8_df_t_clean[,ncol(sncrna_pd_clinical_norm_BL_V4_V8_df_t_clean)])
-lda_predictions <- predict(lda_results)
-lda_df <- data.frame("outcome" = sncrna_pd_clinical_norm_BL_V4_V8_df_t_clean$timepoint,
-                     "lda" = lda_predictions$x)
-
-data_lda <- data.frame(varnames = rownames(coef(lda_results)), coef(lda_results))
-data_lda_top8 <- rbind(
-  data_lda[order(abs(data_lda$LD1), decreasing = TRUE), ][c(1:4),],
-  data_lda[order(abs(data_lda$LD2), decreasing = TRUE), ][c(1:4),]
-)
-
-data_lda_top8$angle <- atan2(data_lda_top8$LD1, data_lda_top8$LD2)
-data_lda_top8$x_start <- data_lda_top8$y_start <- 0
-data_lda_top8$x_end <- cos(data_lda_top8$angle) * 3
-data_lda_top8$y_end <- sin(data_lda_top8$angle) * 3
-
-#qda_results <- qda(cohort ~., sncrna_norm_df_bl_t_sig_bl)
-
-lda_pd_plot <-
-  ggplot(data = lda_df, 
-       mapping = aes(x = lda.LD1, y = lda.LD2, color = outcome)) + 
-  geom_point(size = 2, alpha = 0.7) +
-  labs(x = "LD1", y = "LD2") +
-  theme_classic() +
-  stat_ellipse(aes(fill = outcome), geom = "polygon", alpha = 0.3) +
-  geom_hline(yintercept = 0, size = .2) + 
-  geom_vline(xintercept = 0, size = .2) +
-  geom_segment(data = data_lda_top8,
-                      aes(x = 0, y = 0,
-                          xend = x_end, yend = y_end,
-                          shape = NULL, linetype = NULL),
-                      arrow=arrow(length=unit(0.1,"mm")),
-                      color="black") +
-  geom_text(data = data_lda_top8,
-            aes(y = y_end, x = x_end, 
-                label = varnames),
-            size = 2.5, vjust = 1, hjust = 0, colour = "black") +
-  xlab("LD1") +
-  ylab("LD2") +
-  ggtitle("LDA biplot - PD-t0 vs. PD-t4 vs. PD-t8 patients")
-
-lda_pd_plot
-
-ggsave("../figures/subplots/lda_pd_plot.png", 
-       plot = lda_pd_plot,
-       width = 2500,
-       height = 1500,
-       units = "px")
-```
-
-
-
