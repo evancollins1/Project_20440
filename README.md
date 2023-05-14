@@ -26,7 +26,7 @@ All data analyzed in this project is sourced from PPMI. As specified in the user
 
 ## Running the code
 
-The code is broken into two main parts:
+The code is broken down into two main parts:
 
 (1) All non-machine learning analyses (i.e., Figures 2-4, S1-S3 in the report) were coded in R in a single, organiezd R markdown script. This R markdown file is `/scripts/PPMI_data_processing_and_analysis.Rmd` and is best run in RStudio. Running the annotated code line by line will result in the production Figures 2-4, S1-S3 as featured in the report. Note that this R markdown was run with R version 4.1.1 and uses 11 non-base packages: `data.table` (1.14.8), `umap` (0.2.10.0), `ggplot2` (3.4.1), `ggprism` (1.0.4), `rstatix` (0.7.2), `factoextra` (1.0.7), `MASS` (7.3.58.3), `dplyr` (1.1.1), `ggpubr` (0.6.0), `BiocManager` (1.30.20). The R markdown commences by ensuring installation of all packages with these specific versions.
 
