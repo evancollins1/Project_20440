@@ -193,9 +193,8 @@ sncrna_df_bl_t_lda <- sncrna_df_bl_t[-which(cohort_bl_list == "SWEDD"), ]
 pca_results_for_lda <- prcomp(sncrna_norm_df_bl_t[-which(cohort_bl_list == "SWEDD"), ], center = TRUE)
 # remove sncRNAs with zero values across all patients
 sncrna_df_bl_t_pca <- sncrna_norm_df_bl_t[vapply(sncrna_norm_df_bl_t, function(x) length(unique(x)) > 1, logical(1L))]
-pca_results_lda <- prcomp(sncrna_df_bl_t_pca[-which(cohort_bl_list == "SWEDD"), ], center = TRUE, scale = TRUE)
-fviz_eig(pca_results_for_lda)
-which(cohort_bl_list == "SWEDD")
+pca_results_lda <- prcomp(sncrna_df_bl_t_pca[-which(cohort_bl_list == "SWEDD"), ], center = TRUE)
+cumsum(pca_results_lda$sdev^2 / sum(pca_results_lda$sdev^2))
 pca_results_for_lda_top5 <- as.data.frame(pca_results_for_lda$x[ ,c(1:5)])
 pca_results_for_lda_top5$cohort <- cohort_bl_list[-which(cohort_bl_list == "SWEDD")]
 # Run LDA on top 5 PCs
@@ -237,7 +236,7 @@ lda_plot
 ```
 
 
-# Figure 2 - Differential expression analysis of sncRNAs between healthy, prodromal, and PD subjects at baseline
+# Figure 3 - Differential expression analysis of sncRNAs between healthy, prodromal, and PD subjects at baseline
 
 ```{r}
 # Prepare DE analysis
@@ -384,7 +383,7 @@ volcano_bl_p_h <- EnhancedVolcano(
 volcano_bl_p_h
 
 # optionally save
-#ggsave("../figures/subplots/volcano_bl_p_h.png", 
+#ggsave("figures/subplots/fig3_volcano_bl_p_h.png", 
 #       plot = volcano_bl_p_h,
 #       width = 2500,
 #       height = 3000,
@@ -392,7 +391,7 @@ volcano_bl_p_h
 ```
 
 
-# Figure 3 - Number of differentially expressed sncRNAs in PD and prodromal subjects varies by age
+# Figure 4 - Number of differentially expressed sncRNAs in PD and prodromal subjects varies by age
 
 ```{r}
 # Data processing to assign patients into age cohort by 10s of years
@@ -657,7 +656,7 @@ age_plot <- ggarrange(diff_plot, up_plot, down_plot, ncol = 3, common.legend = T
 age_plot
 
 # optionally save
-#ggsave("figures/subplots/fig3_age_plot.png", 
+#ggsave("figures/subplots/fig4_age_plot.png", 
 #       plot = age_plot,
 #       width = 4500,
 #       height = 1500,
@@ -665,7 +664,7 @@ age_plot
 ```
 
 
-# Figure 4 - SNORD48 is amplified in PD patients with worsening motor symptoms over time  
+# Figure 5 - SNORD48 is amplified in PD patients with worsening motor symptoms over time  
 
 ```{r}
 # Line plot of motor scores over time for PD subjects
@@ -754,7 +753,7 @@ ggplot(updrs_part3_pd_with_tx_data_df_v2, aes(x = visit, value)) +
 updrs_imp_wor_line_plot
 
 # optionally save
-#ggsave("figures/subplots/fig4_updrs_imp_wor_line_plot.png", 
+#ggsave("figures/subplots/fig5_updrs_imp_wor_line_plot.png", 
 #       plot = updrs_imp_wor_line_plot,
 #       width = 2000,
 #       height = 1300,
@@ -827,7 +826,7 @@ volcano_wor_nc <-
 volcano_wor_nc
 
 # optionally save
-#ggsave("figures/subplots/fig4_volcano_wor_nc.png", 
+#ggsave("figures/subplots/fig5_volcano_wor_nc.png", 
 #       plot = volcano_wor_nc,
 #       width = 2500,
 #       height = 3000,
