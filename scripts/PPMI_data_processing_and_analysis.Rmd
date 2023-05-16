@@ -663,7 +663,6 @@ age_plot
 #       units = "px")
 ```
 
-
 # Figure 5 - SNORD48 is amplified in PD patients with worsening motor symptoms over time  
 
 ```{r}
