@@ -1,11 +1,11 @@
 ---
-title: "MIT 20.440 Final Project: sncRNA transcriptomics as a predictive marker of Parkinson’s disease - all data analysis besides machine learning"
+title: "MIT 20.440 Final Project: sncRNA transcriptomics as a predictive marker of Parkinson’s disease progression - all data analysis besides machine learning"
 author: "Evan Collins and Brian Cheng"
 date: "1 May 2023"
 output: html_document
 ---
 
-This R markdown document is best viewed and run in RStudio. Running each chunk will result in the production of all figures (besides those involving machine learning) as featured in our MIT 20.440 final project entitled *sncRNA transcriptomics as a predictive marker of Parkinson’s disease*.
+This R markdown document is best viewed and run in RStudio. Running each chunk will result in the production of all figures (besides those involving machine learning) as featured in our MIT 20.440 final project entitled *sncRNA transcriptomics as a predictive marker of Parkinson’s disease progression*.
 
 # 0. Load necessary packages
 
@@ -1230,7 +1230,6 @@ spin_top4_transcripts_p_density
 
 # Supplementary 3 - Tracking how sncRNAs correlate with motor symptoms in PD subjects over time
 
-
 ```{r, warning = FALSE}
 # Histogram of five significant sncRNAs identified in DE analysis
 sncrna_norm_df_clean <- sncrna_norm_df[, c(PATNO_list %in% PATNO_list_clean)]
@@ -1360,8 +1359,6 @@ pd_h_sig_transcripts_rho_hist
 #       height = 1500,
 #       units = "px")
 ```
-
-## Figure 6B - Top 4 sncRNAs that correlate with motor symptoms
 
 ```{r, warning = FALSE, message = FALSE}
 # Distributions of top 4 sncRNAs that correlate with motor symptoms
